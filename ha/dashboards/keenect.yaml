@@ -35,7 +35,7 @@ views:
             entity: climate.keen_ben_thermostat
           - type: entities
             entities:
-              - entity: cover.keen_ben
+              - entity: light.keen_ben
                 name: Vent
               - entity: sensor.keenect_vent_ben
                 name: Vent Level
@@ -51,7 +51,7 @@ views:
             entity: climate.keen_gene_thermostat
           - type: entities
             entities:
-              - entity: cover.keen_gene
+              - entity: light.keen_gene
                 name: Vent
               - entity: sensor.keenect_vent_gene
                 name: Vent Level
@@ -67,9 +67,9 @@ views:
             entity: climate.keen_mbr_virtual_thermostat
           - type: entities
             entities:
-              - entity: cover.keen_mbr_1
+              - entity: light.keen_mbr_1
                 name: Vent 1
-              - entity: cover.keen_mbr_2
+              - entity: light.keen_mbr_2
                 name: Vent 2
               - entity: sensor.keenect_vent_mbr
                 name: Vent Level

@@ -9,6 +9,7 @@ First floor servo register controlled directly via HTTP (WiFi device).
 Version: 1.3.0
 """
 
+import datetime as dt_mod
 import json as json_mod
 import time as time_mod
 import urllib.request
@@ -19,8 +20,8 @@ import urllib.request
 ZONES = {
     "ben": {
         "thermostat": "climate.keen_ben_thermostat",
-        "vents": ["cover.keen_ben"],
-        "vent_type": "cover",
+        "vents": ["light.keen_ben"],
+        "vent_type": "light",
         "health_sensors": ["sensor.keen_ben_pressure"],
         "heat_min_vo": 0, "heat_max_vo": 100,
         "cool_min_vo": 0, "cool_max_vo": 100,
@@ -30,8 +31,8 @@ ZONES = {
     },
     "gene": {
         "thermostat": "climate.keen_gene_thermostat",
-        "vents": ["cover.keen_gene"],
-        "vent_type": "cover",
+        "vents": ["light.keen_gene"],
+        "vent_type": "light",
         "health_sensors": ["sensor.keen_gene_pressure"],
         "heat_min_vo": 0, "heat_max_vo": 100,
         "cool_min_vo": 0, "cool_max_vo": 100,
@@ -41,8 +42,8 @@ ZONES = {
     },
     "mbr": {
         "thermostat": "climate.keen_mbr_virtual_thermostat",
-        "vents": ["cover.keen_mbr_1", "cover.keen_mbr_2"],
-        "vent_type": "cover",
+        "vents": ["light.keen_mbr_1", "light.keen_mbr_2"],
+        "vent_type": "light",
         "health_sensors": ["sensor.keen_mbr_1_pressure", "sensor.keen_mbr_2_pressure"],
         "heat_min_vo": 0, "heat_max_vo": 100,
         "cool_min_vo": 0, "cool_max_vo": 100,
@@ -244,7 +245,7 @@ def _hvac_push(button):
     url = f"{HVAC_SERVER}/0{path}"
     for attempt in range(3):
         try:
-            urllib.request.urlopen(url, timeout=5)
+            task.executor(urllib.request.urlopen, url, None, 5)
             if attempt > 0:
                 log.info(f"keenect: HVAC GET {url} (retry {attempt} ok)")
             else:
@@ -253,7 +254,7 @@ def _hvac_push(button):
         except Exception as e:
             log.warning(f"keenect: HVAC {url} attempt {attempt+1} failed: {e}")
             if attempt < 2:
-                time_mod.sleep(1)
+                task.sleep(1)
     log.error(f"keenect: HVAC command {url} FAILED after 3 attempts")
     return False
 
@@ -335,7 +336,7 @@ def _set_vent(zone_name, level):
     """Set vent opening for a zone (0-100)."""
     zone = ZONES[zone_name]
     level = max(0, min(100, int(level)))
-    vtype = zone.get("vent_type", "cover")
+    vtype = zone.get("vent_type", "light")
 
     for vent_id in zone["vents"]:
         key = f"{zone_name}:{vent_id}"
@@ -350,23 +351,21 @@ def _set_vent(zone_name, level):
                 for attempt in range(3):
                     try:
                         req = urllib.request.Request(url, data=b"", method="POST")
-                        urllib.request.urlopen(req, timeout=5)
+                        task.executor(urllib.request.urlopen, req, None, 2)
                         ok = True
                         break
                     except Exception as e2:
                         log.warning(f"keenect: servo {url} attempt {attempt+1}: {e2}")
                         if attempt < 2:
-                            time_mod.sleep(1)
+                            task.sleep(1)
                 if not ok:
                     log.error(f"keenect: servo {url} FAILED after 3 attempts")
                     continue
-            elif vtype == "light":
+            else:  # light (Keen vents via Hubitat)
                 if level == 0:
                     light.turn_off(entity_id=vent_id)
                 else:
                     light.turn_on(entity_id=vent_id, brightness_pct=level)
-            else:
-                cover.set_cover_position(entity_id=vent_id, position=level)
             _st["vent_levels"][key] = level
             log.info(f"keenect: {zone_name} vent {vent_id} -> {level}%")
         except Exception as e:
@@ -420,7 +419,13 @@ def _calc_opening(zone_name, zstate, temp, setpoint):
 # ---------------------------------------------------------------------------
 def _get_climate_attr(entity_id, attr, default=None):
     """Read a climate entity attribute."""
-    val = state.getattr(entity_id).get(attr)
+    try:
+        attrs = state.getattr(entity_id)
+        if attrs is None:
+            return default
+        val = attrs.get(attr)
+    except Exception:
+        return default
     if val is None:
         return default
     try:
@@ -473,10 +478,10 @@ def _eval_zone(zone_name):
         _set_vent(zone_name, opening)
     elif op == "IDLE" and old != "IDLE":
         # Zone just went idle
-        others_active = any(
+        others_active = any([
             s not in ("IDLE", "OFF", "")
             for n, s in _st["zone_states"].items() if n != zone_name
-        )
+        ])
         if others_active:
             log.info(f"keenect: {zone_name} idle, others active -> close vents")
             _close_zone(zone_name)
@@ -488,7 +493,7 @@ def _eval_zone(zone_name):
 
 
 def _all_idle():
-    return all(s in ("IDLE", "OFF", "") for s in _st["zone_states"].values())
+    return all([s in ("IDLE", "OFF", "") for s in _st["zone_states"].values()])
 
 
 # ---------------------------------------------------------------------------
@@ -507,7 +512,7 @@ def _eval_master():
     for zn in ZONES:
         _eval_zone(zn)
 
-    demanding = sum(1 for s in _st["zone_states"].values() if s in ("HEATING", "COOLING"))
+    demanding = sum([1 for s in _st["zone_states"].values() if s in ("HEATING", "COOLING")])
     mode = _hvac_mode()
 
     if demanding > 0:
@@ -635,7 +640,7 @@ def _update_status():
             "hvac_on": _st["hvac_on"],
             "recirc_active": _st["recirc_active"],
             "outdoor_temp": ot,
-            "cool_lockout": ot is not None and ot < _cool_lockout_temp() if ot else False,
+            "cool_lockout": (ot is not None and ot < _cool_lockout_temp()) if ot is not None else False,
         })
     except Exception as e:
         log.warning(f"keenect: status update failed: {e}")
@@ -644,19 +649,26 @@ def _update_status():
     # Per-zone vent levels
     for zn, zone in ZONES.items():
         zstate = _st["zone_states"].get(zn, "IDLE")
-        vtype = zone.get("vent_type", "cover")
+        vtype = zone.get("vent_type", "light")
         level = 0
         for vent_id in zone["vents"]:
-            if vtype == "cover":
-                # Read actual position from cover entity
+            if vtype == "light":
+                # Read actual brightness from light entity (0-255 scale)
                 try:
-                    attrs = state.getattr(vent_id)
-                    pos = attrs.get("current_position", 0)
-                    level = max(level, int(pos) if pos is not None else 0)
+                    s = state.get(vent_id)
+                    if s == "on":
+                        attrs = state.getattr(vent_id)
+                        bri = attrs.get("brightness", 0)
+                        pct = round(int(bri) * 100 / 255) if bri else 0
+                        level = max(level, pct)
                 except Exception:
                     level = max(level, 0)
-            else:
+            elif vtype == "servo":
                 # Servo has no feedback - use commanded value
+                key = f"{zn}:{vent_id}"
+                level = max(level, _st["vent_levels"].get(key, 0))
+            else:
+                # Generic fallback - use commanded value
                 key = f"{zn}:{vent_id}"
                 level = max(level, _st["vent_levels"].get(key, 0))
 
@@ -685,7 +697,6 @@ def _check_vent_health():
     if not _enabled():
         return
 
-    import datetime as dt_mod
     utc_now = dt_mod.datetime.now(dt_mod.timezone.utc)
     stale_vents = []
 
@@ -734,15 +745,18 @@ def _check_vent_health():
         log.warning(f"keenect: vent {vent_id} ({zn}) {reason} "
                     f"(sensor: {sensor_id})")
 
-        if last_level is not None and zone.get("vent_type") == "cover":
+        if last_level is not None and zone.get("vent_type") == "light":
             log.info(f"keenect: re-sending {vent_id} -> {last_level}%")
             try:
-                cover.set_cover_position(entity_id=vent_id, position=last_level)
+                if last_level == 0:
+                    light.turn_off(entity_id=vent_id)
+                else:
+                    light.turn_on(entity_id=vent_id, brightness_pct=last_level)
             except Exception as e:
                 log.error(f"keenect: re-send to {vent_id} failed: {e}")
 
     # Persistent notification in HA
-    vent_list = ", ".join(f"{vid} ({reason})" for _, vid, _, reason in stale_vents)
+    vent_list = ", ".join([f"{vid} ({reason})" for _, vid, _, reason in stale_vents])
     try:
         persistent_notification.create(
             title="Keenect: Stale Vent Detected",
@@ -761,21 +775,33 @@ def _check_vent_health():
 @time_trigger("startup")
 def on_startup():
     """Restore persisted state and re-evaluate after HA restart."""
-    _load_state()
-    log.info(
-        f"keenect: startup - hvac_on={_st['hvac_on']} "
-        f"main={_st['main_state']} recirc={_st['recirc_active']}"
-    )
-    _update_status()
-    if _enabled():
-        _eval_master()
-        _check_consistency()
+    try:
+        _load_state()
+        log.info(
+            f"keenect: startup - hvac_on={_st['hvac_on']} "
+            f"main={_st['main_state']} recirc={_st['recirc_active']}"
+        )
+        # After reload, hardware state is unknown — reset so eval re-sends all commands
+        was_on = _st["hvac_on"]
+        _st["hvac_on"] = False
+        _st["vent_levels"] = {}
+        if was_on:
+            log.info("keenect: startup - reset hvac_on to force re-arm")
+        _update_status()
+        if _enabled():
+            _eval_master()
+            _check_consistency()
+    except Exception as e:
+        log.error(f"keenect: on_startup crashed: {e}")
 
 
 @time_trigger("period(now, 15s)")
 def periodic_eval():
     """Evaluate every 15 seconds (matches Hubitat schedule)."""
-    _eval_master()
+    try:
+        _eval_master()
+    except Exception as e:
+        log.error(f"keenect: periodic_eval crashed: {e}")
 
 
 @state_trigger(
@@ -786,60 +812,81 @@ def periodic_eval():
 )
 def on_climate_change(**kwargs):
     """React to any climate entity changes (state, temp, setpoint, hvac_action)."""
-    log.info(f"keenect: climate change {kwargs.get('var_name')}")
-    _eval_master()
+    try:
+        log.info(f"keenect: climate change {kwargs.get('var_name')}")
+        _eval_master()
+    except Exception as e:
+        log.error(f"keenect: on_climate_change crashed: {e}")
 
 
 @state_trigger("input_select.hvac_mode")
 def on_mode_change(**kwargs):
-    mode = state.get("input_select.hvac_mode")
-    log.info(f"keenect: HVAC mode -> {mode}")
-    if mode == "OFF":
-        if _st["hvac_on"]:
-            _hvac_turn_off()
-        _close_all_vents()
-        _save_if_changed()
-    else:
-        # Mode changed (HEAT<->COOL): turn off first if running in the other mode
-        if _st["hvac_on"]:
-            _hvac_turn_off()
-        _eval_master()
+    try:
+        mode = state.get("input_select.hvac_mode")
+        log.info(f"keenect: HVAC mode -> {mode}")
+        if mode == "OFF":
+            if _st["hvac_on"]:
+                _hvac_turn_off()
+            _close_all_vents()
+            _save_if_changed()
+        else:
+            # Mode changed (HEAT<->COOL): turn off first if running in the other mode
+            if _st["hvac_on"]:
+                _hvac_turn_off()
+            _eval_master()
+    except Exception as e:
+        log.error(f"keenect: on_mode_change crashed: {e}")
 
 
 @state_trigger("input_boolean.keenect_enabled")
 def on_enable_change(**kwargs):
-    on = state.get("input_boolean.keenect_enabled") == "on"
-    log.info(f"keenect: {'enabled' if on else 'disabled'}")
-    if on:
-        _eval_master()
-    else:
-        if _st["hvac_on"]:
-            _hvac_turn_off()
-        if _st["recirc_active"]:
-            _stop_recirc("Disabled")
-        _save_if_changed()
+    try:
+        on = state.get("input_boolean.keenect_enabled") == "on"
+        log.info(f"keenect: {'enabled' if on else 'disabled'}")
+        if on:
+            _eval_master()
+        else:
+            if _st["hvac_on"]:
+                _hvac_turn_off()
+            if _st["recirc_active"]:
+                _stop_recirc("Disabled")
+            _save_if_changed()
+    except Exception as e:
+        log.error(f"keenect: on_enable_change crashed: {e}")
 
 
 @time_trigger("cron(*/5 * * * *)")
 def periodic_consistency():
-    _check_consistency()
+    try:
+        _check_consistency()
+    except Exception as e:
+        log.error(f"keenect: periodic_consistency crashed: {e}")
 
 
 @time_trigger("cron(*/3 * * * *)")
 def periodic_recirc():
-    _check_recirc()
+    try:
+        _check_recirc()
+    except Exception as e:
+        log.error(f"keenect: periodic_recirc crashed: {e}")
 
 
 @time_trigger("cron(*/10 * * * *)")
 def periodic_vent_health():
     """Check vent health every 10 minutes."""
-    _check_vent_health()
+    try:
+        _check_vent_health()
+    except Exception as e:
+        log.error(f"keenect: periodic_vent_health crashed: {e}")
 
 
 @time_trigger("cron(0 * * * *)")
 def log_stats():
-    log.info(
-        f"keenect stats: state={_st['main_state']} hvac={_st['hvac_on']} "
-        f"recirc={_st['recirc_active']} zones={_st['zone_states']} "
-        f"vents={_st['vent_levels']}"
-    )
+    try:
+        log.info(
+            f"keenect stats: state={_st['main_state']} hvac={_st['hvac_on']} "
+            f"recirc={_st['recirc_active']} zones={_st['zone_states']} "
+            f"vents={_st['vent_levels']}"
+        )
+    except Exception as e:
+        log.error(f"keenect: log_stats crashed: {e}")
