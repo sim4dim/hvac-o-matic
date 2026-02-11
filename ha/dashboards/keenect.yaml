@@ -1,0 +1,101 @@
+title: HVAC Zones
+views:
+  - title: Overview
+    path: overview
+    icon: mdi:hvac
+    cards:
+      # Master Controls
+      - type: entities
+        title: HVAC Control
+        entities:
+          - entity: input_boolean.keenect_enabled
+            name: Keenect Enabled
+          - entity: input_select.hvac_mode
+            name: HVAC Mode
+          - entity: input_number.vent_closure_delay
+            name: Vent Closure Delay
+          - entity: input_boolean.enable_recirculation
+            name: Smart Recirculation
+          - entity: input_number.recirculation_delay
+            name: Recirculation Delay
+          - entity: input_boolean.enable_circulation
+            name: Continuous Circulation
+
+      # Zone Cards
+      - type: vertical-stack
+        title: Ben's Room
+        cards:
+          - type: thermostat
+            entity: climate.keen_ben_thermostat
+          - type: entities
+            entities:
+              - entity: cover.keen_ben
+                name: Vent
+              - entity: sensor.keen_ben_thermostat_temperature
+                name: Temperature
+              - entity: sensor.keen_ben_thermostat_heatingsetpoint
+                name: Heat Setpoint
+              - entity: sensor.keen_ben_thermostat_thermostatoperatingstate
+                name: State
+              - entity: sensor.keen_ben_battery
+                name: Vent Battery
+              - entity: sensor.keen_ben_pressure
+                name: Vent Pressure
+
+      - type: vertical-stack
+        title: Gene's Room
+        cards:
+          - type: thermostat
+            entity: climate.keen_gene_thermostat
+          - type: entities
+            entities:
+              - entity: cover.keen_gene
+                name: Vent
+              - entity: sensor.keen_gene_thermostat_temperature
+                name: Temperature
+              - entity: sensor.keen_gene_thermostat_heatingsetpoint
+                name: Heat Setpoint
+              - entity: sensor.keen_gene_thermostat_thermostatoperatingstate
+                name: State
+              - entity: sensor.keen_gene_battery
+                name: Vent Battery
+              - entity: sensor.keen_gene_pressure
+                name: Vent Pressure
+
+      - type: vertical-stack
+        title: Master Bedroom
+        cards:
+          - type: thermostat
+            entity: climate.keen_mbr_virtual_thermostat
+          - type: entities
+            entities:
+              - entity: cover.keen_mbr_1
+                name: Vent 1
+              - entity: cover.keen_mbr_2
+                name: Vent 2
+              - entity: sensor.keen_mbr_virtual_thermostat_temperature
+                name: Temperature
+              - entity: sensor.keen_mbr_virtual_thermostat_heatingsetpoint
+                name: Heat Setpoint
+              - entity: sensor.keen_mbr_virtual_thermostat_thermostatoperatingstate
+                name: State
+              - entity: sensor.keen_mbr_1_battery
+                name: Vent 1 Battery
+              - entity: sensor.keen_mbr_2_battery
+                name: Vent 2 Battery
+
+      - type: vertical-stack
+        title: First Floor
+        cards:
+          - type: thermostat
+            entity: climate.first_floor_virtual_thermostat
+          - type: entities
+            entities:
+              - entity: light.first_floor_register
+                name: Register
+              - entity: sensor.first_floor_virtual_thermostat_temperature
+                name: Temperature
+              - entity: sensor.first_floor_virtual_thermostat_heatingsetpoint
+                name: Heat Setpoint
+              - entity: sensor.first_floor_virtual_thermostat_thermostatoperatingstate
+                name: State

@@ -1,0 +1,47 @@
+# Keenect HA - Input helpers for HVAC zone control
+# Replaces Hubitat KeenectLiteMaster/Zone configuration
+
+input_select:
+  hvac_mode:
+    name: HVAC Mode
+    options:
+      - HEAT
+      - COOL
+      - "OFF"
+    initial: HEAT
+    icon: mdi:thermostat
+
+input_number:
+  vent_closure_delay:
+    name: Vent Closure Delay
+    min: 0
+    max: 300
+    step: 10
+    initial: 120
+    unit_of_measurement: seconds
+    icon: mdi:timer-outline
+
+  recirculation_delay:
+    name: Recirculation Delay
+    min: 5
+    max: 60
+    step: 5
+    initial: 15
+    unit_of_measurement: minutes
+    icon: mdi:fan-clock
+
+input_boolean:
+  keenect_enabled:
+    name: Keenect Enabled
+    initial: false
+    icon: mdi:hvac
+
+  enable_recirculation:
+    name: Enable Smart Recirculation
+    initial: false
+    icon: mdi:fan
+
+  enable_circulation:
+    name: Enable Continuous Circulation
+    initial: false
+    icon: mdi:fan-auto
