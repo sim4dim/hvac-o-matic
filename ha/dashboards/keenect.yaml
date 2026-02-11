@@ -10,8 +10,14 @@ views:
         entities:
           - entity: input_boolean.keenect_enabled
             name: Keenect Enabled
+          - entity: sensor.keenect_status
+            name: Status
           - entity: input_select.hvac_mode
             name: HVAC Mode
+          - entity: input_number.cool_lockout_temp
+            name: Cool Lockout Temp
+          - entity: input_number.keenect_hysteresis
+            name: Hysteresis
           - entity: input_number.vent_closure_delay
             name: Vent Closure Delay
           - entity: input_boolean.enable_recirculation
@@ -31,6 +37,8 @@ views:
             entities:
               - entity: cover.keen_ben
                 name: Vent
+              - entity: sensor.keenect_vent_ben
+                name: Vent Level
               - entity: sensor.keen_ben_battery
                 name: Vent Battery
               - entity: sensor.keen_ben_pressure
@@ -45,6 +53,8 @@ views:
             entities:
               - entity: cover.keen_gene
                 name: Vent
+              - entity: sensor.keenect_vent_gene
+                name: Vent Level
               - entity: sensor.keen_gene_battery
                 name: Vent Battery
               - entity: sensor.keen_gene_pressure
@@ -61,6 +71,8 @@ views:
                 name: Vent 1
               - entity: cover.keen_mbr_2
                 name: Vent 2
+              - entity: sensor.keenect_vent_mbr
+                name: Vent Level
               - entity: sensor.keen_mbr_1_battery
                 name: Vent 1 Battery
               - entity: sensor.keen_mbr_2_battery
@@ -73,5 +85,5 @@ views:
             entity: climate.first_floor_virtual_thermostat
           - type: entities
             entities:
-              - entity: light.first_floor_register
-                name: Register
+              - entity: sensor.keenect_vent_first_floor
+                name: Servo Angle

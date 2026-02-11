@@ -74,9 +74,7 @@ HVAC_COMMANDS = {
     7: "/FAN/off",    # fanOff
 }
 
-HYSTERESIS = 0.5
 OUTDOOR_TEMP_ENTITY = "sensor.outdoor_temperature"
-COOL_LOCKOUT_TEMP = 50.0  # don't run AC if outdoor temp below this (°F)
 STATE_ENTITY = "input_text.keenect_persisted_state"
 
 # Keys persisted via input_text (survive HA restarts)
@@ -205,6 +203,14 @@ def _circ_enabled():
     return state.get("input_boolean.enable_circulation") == "on"
 
 
+def _hysteresis():
+    return _float("input_number.keenect_hysteresis", 0.5)
+
+
+def _cool_lockout_temp():
+    return _float("input_number.cool_lockout_temp", 50.0)
+
+
 # ---------------------------------------------------------------------------
 # HVAC furnace control
 # ---------------------------------------------------------------------------
@@ -243,8 +249,9 @@ def _hvac_turn_on():
         return
     if mode == "COOL":
         ot = _outdoor_temp()
-        if ot is not None and ot < COOL_LOCKOUT_TEMP:
-            log.warning(f"keenect: COOL blocked - outdoor temp {ot}°F < {COOL_LOCKOUT_TEMP}°F")
+        lockout = _cool_lockout_temp()
+        if ot is not None and ot < lockout:
+            log.warning(f"keenect: COOL blocked - outdoor temp {ot}°F < {lockout}°F")
             return
     # If already on in a different mode, turn off first
     if _st["hvac_on"] and (
@@ -429,9 +436,10 @@ def _eval_zone(zone_name):
     old = _st["zone_states"].get(zone_name, "IDLE")
 
     # Hysteresis override
-    if op == "HEATING" and zheat is not None and temp >= zheat + HYSTERESIS:
+    hyst = _hysteresis()
+    if op == "HEATING" and zheat is not None and temp >= zheat + hyst:
         op = "IDLE"
-    if op == "COOLING" and zcool is not None and temp <= zcool - HYSTERESIS:
+    if op == "COOLING" and zcool is not None and temp <= zcool - hyst:
         op = "IDLE"
 
     _st["zone_states"][zone_name] = op
@@ -497,6 +505,7 @@ def _eval_master():
     # Check delayed vent closure timer
     _check_vent_closure_timer(now)
 
+    _update_status()
     _save_if_changed()
 
 
@@ -587,6 +596,56 @@ def _check_consistency():
 
 
 # ---------------------------------------------------------------------------
+# Status entity updates
+# ---------------------------------------------------------------------------
+def _update_status():
+    """Publish current state as HA sensor entities for dashboard visibility."""
+    # Main status
+    if _st["recirc_active"]:
+        status = "RECIRC"
+    else:
+        status = _st["main_state"]
+    ot = _outdoor_temp()
+    try:
+        state.set("sensor.keenect_status", status, {
+            "friendly_name": "Keenect Status",
+            "icon": "mdi:hvac",
+            "hvac_on": _st["hvac_on"],
+            "recirc_active": _st["recirc_active"],
+            "outdoor_temp": ot,
+            "cool_lockout": ot is not None and ot < _cool_lockout_temp() if ot else False,
+        })
+    except Exception as e:
+        log.warning(f"keenect: status update failed: {e}")
+        return
+
+    # Per-zone vent levels
+    for zn, zone in ZONES.items():
+        zstate = _st["zone_states"].get(zn, "IDLE")
+        # Get current vent level from tracked state
+        level = 0
+        for vent_id in zone["vents"]:
+            key = f"{zn}:{vent_id}"
+            level = max(level, _st["vent_levels"].get(key, 0))
+
+        if zone.get("vent_type") == "servo":
+            name = f"Keenect {zn.replace('_', ' ').title()} Servo"
+            unit = "°"
+            icon = "mdi:rotate-right"
+        else:
+            name = f"Keenect {zn.replace('_', ' ').title()} Vent"
+            unit = "%"
+            icon = "mdi:air-filter"
+
+        state.set(f"sensor.keenect_vent_{zn}", level, {
+            "friendly_name": name,
+            "unit_of_measurement": unit,
+            "icon": icon,
+            "zone_state": zstate,
+        })
+
+
+# ---------------------------------------------------------------------------
 # Pyscript triggers
 # ---------------------------------------------------------------------------
 
@@ -598,6 +657,7 @@ def on_startup():
         f"keenect: startup - hvac_on={_st['hvac_on']} "
         f"main={_st['main_state']} recirc={_st['recirc_active']}"
     )
+    _update_status()
     if _enabled():
         _eval_master()
         _check_consistency()
