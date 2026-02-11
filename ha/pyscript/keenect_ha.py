@@ -75,6 +75,8 @@ HVAC_COMMANDS = {
 }
 
 HYSTERESIS = 0.5
+OUTDOOR_TEMP_ENTITY = "sensor.outdoor_temperature"
+COOL_LOCKOUT_TEMP = 50.0  # don't run AC if outdoor temp below this (°F)
 STATE_ENTITY = "input_text.keenect_persisted_state"
 
 # Keys persisted via input_text (survive HA restarts)
@@ -229,12 +231,21 @@ def _hvac_push(button):
     return False
 
 
+def _outdoor_temp():
+    return _float(OUTDOOR_TEMP_ENTITY)
+
+
 def _hvac_turn_on():
     """Activate HVAC in current mode."""
     mode = _hvac_mode()
     if mode == "OFF":
         log.info("keenect: HVAC mode OFF, ignoring on request")
         return
+    if mode == "COOL":
+        ot = _outdoor_temp()
+        if ot is not None and ot < COOL_LOCKOUT_TEMP:
+            log.warning(f"keenect: COOL blocked - outdoor temp {ot}°F < {COOL_LOCKOUT_TEMP}°F")
+            return
     # If already on in a different mode, turn off first
     if _st["hvac_on"] and (
         (mode == "HEAT" and _st["main_state"] == "COOLING") or
