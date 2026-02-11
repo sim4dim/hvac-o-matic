@@ -6,9 +6,10 @@ Controls Keen smart vents via Hubitat integration (Zigbee radios on Hubitat).
 HVAC furnace controlled directly via HTTP to Flask server (bypasses Hubitat).
 First floor servo register controlled directly via HTTP (WiFi device).
 
-Version: 1.2.0
+Version: 1.3.0
 """
 
+import json as json_mod
 import time as time_mod
 import urllib.request
 
@@ -74,9 +75,16 @@ HVAC_COMMANDS = {
 }
 
 HYSTERESIS = 0.5
+STATE_ENTITY = "input_text.keenect_persisted_state"
+
+# Keys persisted via input_text (survive HA restarts)
+_PERSIST_KEYS = [
+    "main_state", "hvac_on", "recirc_active", "zone_states",
+    "hvac_off_time", "vents_closed_after_off",
+]
 
 # ---------------------------------------------------------------------------
-# Module-level state (resets on pyscript reload)
+# Module-level state
 # ---------------------------------------------------------------------------
 _st = {
     "main_state": "IDLE",
@@ -89,7 +97,72 @@ _st = {
     "retry_count": 0,
     "hvac_off_time": None,      # timestamp when HVAC was turned off
     "vents_closed_after_off": True,  # whether vents were closed after last HVAC off
+    "_last_persisted": None,    # snapshot of last persisted state
 }
+
+
+# ---------------------------------------------------------------------------
+# State persistence
+# ---------------------------------------------------------------------------
+def _persist_snapshot():
+    """Return a string of the persisted fields for change detection."""
+    return json_mod.dumps({k: _st.get(k) for k in _PERSIST_KEYS}, sort_keys=True)
+
+
+def _save_state():
+    """Persist critical state to an HA input_text entity."""
+    # Use compact keys to fit in 255 chars
+    data = {
+        "ms": _st["main_state"],
+        "ho": 1 if _st["hvac_on"] else 0,
+        "ra": 1 if _st["recirc_active"] else 0,
+        "zs": {k: v[:1] for k, v in _st["zone_states"].items()},  # I/H/C/F
+        "ot": _st["hvac_off_time"],
+        "vc": 1 if _st["vents_closed_after_off"] else 0,
+    }
+    try:
+        val = json_mod.dumps(data, separators=(",", ":"))
+        input_text.set_value(entity_id=STATE_ENTITY, value=val)
+    except Exception as e:
+        log.error(f"keenect: failed to save state: {e}")
+
+
+def _save_if_changed():
+    """Save state only when persisted fields have changed."""
+    snap = _persist_snapshot()
+    if snap != _st.get("_last_persisted"):
+        _save_state()
+        _st["_last_persisted"] = snap
+
+
+# Zone state abbreviation mapping
+_ZS_MAP = {"I": "IDLE", "H": "HEATING", "C": "COOLING", "F": "FAN ONLY"}
+
+
+def _load_state():
+    """Restore state from the HA input_text entity after restart."""
+    try:
+        raw = state.get(STATE_ENTITY)
+        if raw in (None, "", "{}", "unknown", "unavailable"):
+            log.info("keenect: no saved state (first run)")
+            return
+        data = json_mod.loads(raw)
+        _st["main_state"] = data.get("ms", "IDLE")
+        _st["hvac_on"] = bool(data.get("ho", 0))
+        _st["recirc_active"] = bool(data.get("ra", 0))
+        _st["zone_states"] = {
+            k: _ZS_MAP.get(v, "IDLE") for k, v in data.get("zs", {}).items()
+        }
+        _st["hvac_off_time"] = data.get("ot")
+        _st["vents_closed_after_off"] = bool(data.get("vc", 1))
+        _st["_last_persisted"] = _persist_snapshot()
+        log.info(
+            f"keenect: restored state - hvac_on={_st['hvac_on']} "
+            f"main={_st['main_state']} recirc={_st['recirc_active']} "
+            f"zones={_st['zone_states']}"
+        )
+    except Exception as e:
+        log.warning(f"keenect: failed to load state: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -383,6 +456,8 @@ def _eval_master():
     # Check delayed vent closure timer
     _check_vent_closure_timer(now)
 
+    _save_if_changed()
+
 
 def _check_vent_closure_timer(now):
     """Close vents after HVAC off delay has elapsed."""
@@ -458,11 +533,25 @@ def _check_consistency():
     if _all_idle() and _st["hvac_on"] and not _st["recirc_active"]:
         log.warning("keenect: consistency - all idle but HVAC on, forcing off")
         _hvac_turn_off()
+        _save_if_changed()
 
 
 # ---------------------------------------------------------------------------
 # Pyscript triggers
 # ---------------------------------------------------------------------------
+
+@time_trigger("startup")
+def on_startup():
+    """Restore persisted state and re-evaluate after HA restart."""
+    _load_state()
+    log.info(
+        f"keenect: startup - hvac_on={_st['hvac_on']} "
+        f"main={_st['main_state']} recirc={_st['recirc_active']}"
+    )
+    if _enabled():
+        _eval_master()
+        _check_consistency()
+
 
 @time_trigger("period(now, 15s)")
 def periodic_eval():
@@ -490,6 +579,7 @@ def on_mode_change(**kwargs):
         if _st["hvac_on"]:
             _hvac_turn_off()
         _close_all_vents()
+        _save_if_changed()
     else:
         _eval_master()
 
@@ -505,6 +595,7 @@ def on_enable_change(**kwargs):
             _hvac_turn_off()
         if _st["recirc_active"]:
             _stop_recirc("Disabled")
+        _save_if_changed()
 
 
 @time_trigger("cron(*/5 * * * *)")
