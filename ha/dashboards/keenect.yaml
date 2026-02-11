@@ -77,6 +77,10 @@ views:
                 name: Vent 1 Battery
               - entity: sensor.keen_mbr_2_battery
                 name: Vent 2 Battery
+              - entity: sensor.keen_mbr_1_pressure
+                name: Vent 1 Pressure
+              - entity: sensor.keen_mbr_2_pressure
+                name: Vent 2 Pressure
 
       - type: vertical-stack
         title: First Floor
@@ -87,3 +91,42 @@ views:
             entities:
               - entity: sensor.keenect_vent_first_floor
                 name: Servo Angle
+
+  - title: History
+    path: history
+    icon: mdi:chart-line
+    cards:
+      - type: history-graph
+        title: HVAC State
+        hours_to_show: 24
+        entities:
+          - entity: sensor.keenect_status
+            name: HVAC State
+
+      - type: history-graph
+        title: Zone Temperatures
+        hours_to_show: 24
+        entities:
+          - entity: sensor.keen_ben_thermostat_temperature
+            name: Ben
+          - entity: sensor.keen_gene_thermostat_temperature
+            name: Gene
+          - entity: sensor.keen_mbr_virtual_thermostat_temperature
+            name: Master BR
+          - entity: sensor.first_floor_virtual_thermostat_temperature
+            name: 1st Floor
+          - entity: sensor.outdoor_temperature
+            name: Outdoor
+
+      - type: history-graph
+        title: Vent Positions
+        hours_to_show: 24
+        entities:
+          - entity: sensor.keenect_vent_ben
+            name: Ben
+          - entity: sensor.keenect_vent_gene
+            name: Gene
+          - entity: sensor.keenect_vent_mbr
+            name: Master BR
+          - entity: sensor.keenect_vent_first_floor
+            name: 1st Floor Servo
