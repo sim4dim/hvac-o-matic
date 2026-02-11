@@ -2,14 +2,14 @@
 Keenect HA - Keen Vent Zone Control for Home Assistant (pyscript)
 Replaces Hubitat KeenectLiteMaster + KeenectLiteZone
 
-Controls Keen smart vents and HVAC furnace through the Hubitat integration.
-Vents are Zigbee devices on Hubitat; commands go via hubitat.send_command.
-HVAC furnace is controlled via HTTP push buttons on the Hubitat HVAC driver.
+Controls Keen smart vents via Hubitat integration (Zigbee radios on Hubitat).
+HVAC furnace controlled directly via HTTP to Flask server (bypasses Hubitat).
 
-Version: 1.0.0
+Version: 1.1.0
 """
 
 import time as time_mod
+import urllib.request
 
 # ---------------------------------------------------------------------------
 # Zone configuration
@@ -57,9 +57,18 @@ ZONES = {
     },
 }
 
-# HVAC driver entity - used for hubitat.send_command push buttons
-# Button map: 1=off, 2=heatOn, 3=heatOff, 4=coolOn, 5=coolOff, 6=fanOn, 7=fanOff
-HVAC_ENTITY = "event.first_floor_register_button_1"
+# HVAC Flask server - direct HTTP control (bypasses Hubitat driver)
+HVAC_SERVER = "http://192.168.1.123:5000"
+# Button-to-URL path mapping (matches HVACdriver.groovy push commands)
+HVAC_COMMANDS = {
+    1: "/off",        # off
+    2: "/HEAT/on",    # heatOn
+    3: "/HEAT/off",   # heatOff
+    4: "/COOL/on",    # coolOn
+    5: "/COOL/off",   # coolOff
+    6: "/FAN/on",     # fanOn
+    7: "/FAN/off",    # fanOff
+}
 
 HYSTERESIS = 0.5
 
@@ -122,9 +131,17 @@ def _circ_enabled():
 # HVAC furnace control
 # ---------------------------------------------------------------------------
 def _hvac_push(button):
-    """Push a button on the HVAC driver via Hubitat."""
-    log.info(f"keenect: HVAC push button {button}")
-    hubitat.send_command(entity_id=HVAC_ENTITY, command="push", args=button)
+    """Send HVAC command directly to Flask server."""
+    path = HVAC_COMMANDS.get(button)
+    if path is None:
+        log.error(f"keenect: unknown HVAC button {button}")
+        return
+    url = f"{HVAC_SERVER}/0{path}"
+    log.info(f"keenect: HVAC GET {url}")
+    try:
+        urllib.request.urlopen(url, timeout=5)
+    except Exception as e:
+        log.error(f"keenect: HVAC command failed: {e}")
 
 
 def _hvac_turn_on():
