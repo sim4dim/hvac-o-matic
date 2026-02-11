@@ -112,6 +112,15 @@ def _persist_snapshot():
 def _save_state():
     """Persist critical state to an HA input_text entity."""
     # Use compact keys to fit in 255 chars
+    # Collect servo vent levels (covers report their own state)
+    sv = {}
+    for zn, zone in ZONES.items():
+        if zone.get("vent_type") == "servo":
+            for vid in zone["vents"]:
+                key = f"{zn}:{vid}"
+                val = _st["vent_levels"].get(key)
+                if val is not None:
+                    sv[key] = val
     data = {
         "ms": _st["main_state"],
         "ho": 1 if _st["hvac_on"] else 0,
@@ -119,6 +128,7 @@ def _save_state():
         "zs": {k: v[:1] for k, v in _st["zone_states"].items()},  # I/H/C/F
         "ot": _st["hvac_off_time"],
         "vc": 1 if _st["vents_closed_after_off"] else 0,
+        "sv": sv,
     }
     try:
         val = json_mod.dumps(data, separators=(",", ":"))
@@ -155,6 +165,9 @@ def _load_state():
         }
         _st["hvac_off_time"] = data.get("ot")
         _st["vents_closed_after_off"] = bool(data.get("vc", 1))
+        # Restore servo vent levels (covers report their own state)
+        for key, val in data.get("sv", {}).items():
+            _st["vent_levels"][key] = val
         _st["_last_persisted"] = _persist_snapshot()
         log.info(
             f"keenect: restored state - hvac_on={_st['hvac_on']} "
@@ -475,6 +488,7 @@ def _all_idle():
 # ---------------------------------------------------------------------------
 def _eval_master():
     if not _enabled():
+        _update_status()
         return
 
     now = time_mod.time()
@@ -622,11 +636,21 @@ def _update_status():
     # Per-zone vent levels
     for zn, zone in ZONES.items():
         zstate = _st["zone_states"].get(zn, "IDLE")
-        # Get current vent level from tracked state
+        vtype = zone.get("vent_type", "cover")
         level = 0
         for vent_id in zone["vents"]:
-            key = f"{zn}:{vent_id}"
-            level = max(level, _st["vent_levels"].get(key, 0))
+            if vtype == "cover":
+                # Read actual position from cover entity
+                try:
+                    attrs = state.getattr(vent_id)
+                    pos = attrs.get("current_position", 0)
+                    level = max(level, int(pos) if pos is not None else 0)
+                except Exception:
+                    level = max(level, 0)
+            else:
+                # Servo has no feedback - use commanded value
+                key = f"{zn}:{vent_id}"
+                level = max(level, _st["vent_levels"].get(key, 0))
 
         if zone.get("vent_type") == "servo":
             name = f"Keenect {zn.replace('_', ' ').title()} Servo"
