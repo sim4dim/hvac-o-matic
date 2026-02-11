@@ -1,7 +1,7 @@
 /**
-*  
+*
 *V2.1.13 - circulate
-*V2.1.12 - Fixed "cool off" (June 2025) 
+*V2.1.12 - Fixed "cool off" (June 2025)
 *  V2.1.11 - Finalized with recursion fixes, state refresh, and diagnostic logging (Feb 2025)
  *
  *  Copyright 2019 Craig Romei
@@ -77,7 +77,7 @@ def initialize() {
     state.stats.lastHvacAction = now()
     state.mainState = "IDLE"
     state.retryCount = 0
-    
+
     // Add recirculation state variables
     state.recirculationActive = false
     state.lastAllIdleTime = null
@@ -101,7 +101,7 @@ def initialize() {
     schedule('0/15 * * ? * * *', "SetChildAction", [data:"Parent"])
     schedule('0 */5 * * * ?', "checkHVACConsistency")
     schedule('0 0 * * * ?', "logSystemStats")
-    
+
     // Add recirculation check schedule
     if (enableRecirculation) {
         schedule('0 */3 * * * ?', "checkRecirculation")
@@ -139,14 +139,18 @@ def SetChildAction(FromApp) {
             debuglog "Action for ${child.label}: ${childState}, contributes: ${contribution}, running total: ${state.action}"
         }
         debuglog "Total action count: ${state.action}"
-        
+
         if (state.action > 0) {
-            // Zone demand detected - exit recirculation if active
-            if (state.recirculationActive) {
-                stopRecirculation("Zone heating/cooling demand")
+            if (masterHVACMode == "OFF") {
+                infolog "Zone demand detected but master mode is OFF, ignoring"
+            } else {
+                // Zone demand detected - exit recirculation if active
+                if (state.recirculationActive) {
+                    stopRecirculation("Zone heating/cooling demand")
+                }
+                infolog "Activating HVAC for ${state.action} zones"
+                callAction(1)
             }
-            infolog "Activating HVAC for ${state.action} zones"
-            callAction(1)
         } else {
             infolog "All zones idle"
             if (!state.recirculationActive) {
@@ -205,7 +209,7 @@ def callAction(OnOff) {
     } else {
         // HVAC shutdown sequence
         infolog "Initiating HVAC shutdown sequence"
-        
+
         // Step 1: Turn off the correct mode
         switch (state.mainState) {
             case "HEATING":
@@ -214,7 +218,7 @@ def callAction(OnOff) {
                 pauseExecution(500)
                 break
             case "COOLING":
-                infolog "Shutting down cooling mode"  
+                infolog "Shutting down cooling mode"
                 HVACSwitch.push(5)
                 pauseExecution(500)
                 break
@@ -223,7 +227,7 @@ def callAction(OnOff) {
                 HVACSwitch.push(1)
                 pauseExecution(500)
         }
-        
+
         // Step 2: Enhanced fan control logic
         if (state.recirculationActive) {
             // Keep fan running for recirculation
@@ -238,10 +242,10 @@ def callAction(OnOff) {
             HVACSwitch.push(7)
             infolog "Turning fan off"
         }
-        
+
         state.mainState = "IDLE"
         runIn(5, "verifyHVACOff")
-        
+
         // Only schedule vent closure if not in recirculation mode
         if (!state.recirculationActive) {
             def delay = ventClosureDelay ?: 120
@@ -259,7 +263,7 @@ def closeAllZoneVents() {
         infolog "Skipping vent closure - smart recirculation mode active"
         return
     }
-    
+
     infolog "Closing all zone vents at ${new Date(now()).format('HH:mm:ss')}"
     childApps.each { child ->
         if (!child.PauseZone) {
@@ -375,22 +379,22 @@ def logSystemStats() {
 
 def checkRecirculation() {
     if (!enableRecirculation) return
-    
+
     // Don't interfere with active HVAC operations
     if (state.debounceSetChildAction) {
         debuglog "Skipping recirculation check - system busy"
         return
     }
-    
+
     def allZonesIdle = childApps.every { child ->
         def childState = state.childState[child.label] ?: child.ParentGetTstatState()
         return (childState == "IDLE" || childState == "OFF")
     }
-    
+
     def hvacState = getMainTstatState()
     def currentTime = now()
     def delayMs = (recirculationDelay ?: 15) * 60000
-    
+
     if (allZonesIdle && (hvacState == "IDLE" || hvacState == "OFF")) {
         if (!state.lastAllIdleTime) {
             state.lastAllIdleTime = currentTime
@@ -410,7 +414,7 @@ def checkRecirculation() {
 def startRecirculation() {
     infolog "Starting smart recirculation mode - opening participating vents"
     state.recirculationActive = true
-    
+
     // Notify participating zones to open vents
     childApps.each { child ->
         if (!child.excludeFromRecirculation) {
@@ -421,7 +425,7 @@ def startRecirculation() {
             }
         }
     }
-    
+
     // Ensure fan is running (may already be on from HVACModeCirculate)
     HVACSwitch.push(6)  // fanOn
     infolog "Smart recirculation mode active"
@@ -431,7 +435,7 @@ def stopRecirculation(reason = "System demand") {
     infolog "Stopping smart recirculation mode: ${reason}"
     state.recirculationActive = false
     state.lastAllIdleTime = null
-    
+
     // Smart fan control when exiting recirculation
     if (HVACModeCirculate) {
         infolog "Leaving fan on per continuous circulation setting"
@@ -440,7 +444,7 @@ def stopRecirculation(reason = "System demand") {
         HVACSwitch.push(7)  // fanOff
         infolog "Turning fan off"
     }
-    
+
     // Reset all zones (close vents if appropriate)
     childApps.each { child ->
         try {
@@ -466,6 +470,6 @@ def getLogLevels() {
 }
 
 def setVersion() {
-    state.version = "2.1.12"
+    state.version = "2.1.13"
     state.InternalName = "KeenectLiteMaster"
 }

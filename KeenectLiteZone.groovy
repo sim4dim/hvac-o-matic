@@ -85,16 +85,16 @@ def initialize() {
     state.stats.lastStateChange = now()
     state.idleNotified = false
     state.closureScheduled = false
-    
+
     // Handle recirculation state on restart
     def wasInRecirculation = state.recirculationMode ?: false
     state.recirculationMode = false  // Always clear on restart for safety
-    
+
     state.VentOpeningMap = [:]
     vents.each { vent ->
         state.VentOpeningMap[vent.displayName] = vent.currentValue("level")
     }
-    
+
     // Determine initial vent state
     if (state.thermostatState == "HEATING" || state.thermostatState == "COOLING" || state.thermostatState == "FAN ONLY") {
         def initialOpening = state.thermostatState == "HEATING" ? heatMaxVo.toInteger() : coldMaxVo.toInteger()
@@ -108,7 +108,7 @@ def initialize() {
         } catch (Exception e) {
             debuglog "Could not check master recirculation state: ${e.message}"
         }
-        
+
         if (masterRecirculating && !excludeFromRecirculation) {
             // Rejoin recirculation mode after restart
             infolog "Rejoining recirculation mode after restart"
@@ -118,11 +118,11 @@ def initialize() {
             infolog "Zone idle, vents closed"
         }
     }
-    
+
     if (wasInRecirculation) {
         infolog "Cleared recirculation mode on zone restart for safety"
     }
-    
+
     infolog "Initialization complete"
 }
 
@@ -215,6 +215,7 @@ def zoneEvaluate() {
     if (state.thermostatState != oldState) {
         def duration = nowTime - (state.stats.lastStateChange ?: nowTime)
         state.stats.zoneStateChanges << [timestamp: nowTime, fromState: oldState, toState: state.thermostatState, duration: duration / 1000]
+        if (state.stats.zoneStateChanges.size() > 20) state.stats.zoneStateChanges = state.stats.zoneStateChanges[-20..-1]
         state.stats.lastStateChange = nowTime
         debuglog "State change: ${oldState} to ${state.thermostatState}, duration: ${duration / 1000}s"
         if (state.thermostatState == "IDLE" && !state.idleNotified) {
@@ -293,8 +294,8 @@ def closeVentsLocally() {
                 vent.setLevel(0)
                 state.VentOpeningMap[vent.displayName] = 0
             } catch (Exception e) {
-                infolog "Failed to close ${vent}, retrying in 5s: ${e.message}"
-                runIn(5, "retryCloseVent", [data: vent])
+                infolog "Failed to close ${vent.displayName}, retrying in 5s: ${e.message}"
+                runIn(5, "retryCloseVent", [data: [deviceId: vent.deviceId.toString()]])
             }
         }
     }
@@ -310,21 +311,26 @@ def closeVentsAfterHVACOff() {
                 vent.setLevel(0)
                 state.VentOpeningMap[vent.displayName] = 0
             } catch (Exception e) {
-                infolog "Failed to close ${vent}, retrying in 5s: ${e.message}"
-                runIn(5, "retryCloseVent", [data: vent])
+                infolog "Failed to close ${vent.displayName}, retrying in 5s: ${e.message}"
+                runIn(5, "retryCloseVent", [data: [deviceId: vent.deviceId.toString()]])
             }
         }
     }
     sendDisplayTile()
 }
 
-def retryCloseVent(vent) {
+def retryCloseVent(data) {
+    def ventDevice = vents.find { it.deviceId.toString() == data.deviceId }
+    if (!ventDevice) {
+        infolog "Retry close failed: device ${data.deviceId} not found in zone vents"
+        return
+    }
     try {
-        vent.setLevel(0)
-        state.VentOpeningMap[vent.displayName] = 0
-        debuglog "Retry succeeded for ${vent}"
+        ventDevice.setLevel(0)
+        state.VentOpeningMap[ventDevice.displayName] = 0
+        debuglog "Retry close succeeded for ${ventDevice.displayName}"
     } catch (Exception e) {
-        infolog "Retry failed for ${vent}: ${e.message}"
+        infolog "Retry close failed for ${ventDevice.displayName}: ${e.message}"
     }
 }
 
@@ -435,7 +441,7 @@ def setVents(newVo) {
                     runIn(60, "ventcheck")
                 } catch (Exception e) {
                     infolog "Failed to set ${vent} to ${newVo}: ${e.message}, retrying in 5s"
-                    runIn(5, "retrySetVent", [data: [vent: vent, level: newVo]])
+                    runIn(5, "retrySetVent", [data: [deviceId: vent.deviceId.toString(), level: newVo]])
                 }
             }
         }
@@ -443,13 +449,17 @@ def setVents(newVo) {
 }
 
 def retrySetVent(data) {
-    def vent = data.vent
+    def ventDevice = vents.find { it.deviceId.toString() == data.deviceId }
+    if (!ventDevice) {
+        infolog "Retry set failed: device ${data.deviceId} not found in zone vents"
+        return
+    }
     def level = data.level
     try {
-        vent.setLevel(level)
-        debuglog "Retry succeeded for ${vent} to ${level}"
+        ventDevice.setLevel(level)
+        debuglog "Retry succeeded for ${ventDevice.displayName} to ${level}"
     } catch (Exception e) {
-        infolog "Retry failed for ${vent} to ${level}: ${e.message}"
+        infolog "Retry failed for ${ventDevice.displayName} to ${level}: ${e.message}"
     }
 }
 
@@ -505,10 +515,10 @@ def enterRecirculationMode() {
         infolog "Zone ${app.label} excluded from smart recirculation"
         return
     }
-    
+
     state.recirculationMode = true
     def fanOpening = FanVo?.toInteger() ?: 30
-    
+
     if (!PauseZone) {
         vents.each { vent ->
             try {
@@ -517,11 +527,11 @@ def enterRecirculationMode() {
                 debuglog "Set ${vent} to ${fanOpening}% for recirculation"
             } catch (Exception e) {
                 infolog "Failed to set ${vent} for recirculation: ${e.message}"
-                runIn(5, "retrySetVent", [data: [vent: vent, level: fanOpening]])
+                runIn(5, "retrySetVent", [data: [deviceId: vent.deviceId.toString(), level: fanOpening]])
             }
         }
     }
-    
+
     sendDisplayTile()
     infolog "Zone ${app.label} vents set to ${fanOpening}% for smart recirculation"
 }
@@ -529,7 +539,7 @@ def enterRecirculationMode() {
 def exitRecirculationMode() {
     debuglog "Exiting smart recirculation mode for ${app.label}"
     state.recirculationMode = false
-    
+
     // Close vents when exiting recirculation if zone is idle
     if (state.thermostatState == "IDLE") {
         closeVentsLocally()
@@ -554,6 +564,6 @@ def getLogLevels() {
 }
 
 def setVersion() {
-    state.version = "3.1.12"
+    state.version = "3.1.13"
     state.InternalName = "KeenectLiteZone"
 }
