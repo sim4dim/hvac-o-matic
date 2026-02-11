@@ -21,6 +21,7 @@ ZONES = {
         "thermostat": "climate.keen_ben_thermostat",
         "vents": ["cover.keen_ben"],
         "vent_type": "cover",
+        "health_sensors": ["sensor.keen_ben_pressure"],
         "heat_min_vo": 0, "heat_max_vo": 100,
         "cool_min_vo": 0, "cool_max_vo": 100,
         "fan_vo": 30,
@@ -31,6 +32,7 @@ ZONES = {
         "thermostat": "climate.keen_gene_thermostat",
         "vents": ["cover.keen_gene"],
         "vent_type": "cover",
+        "health_sensors": ["sensor.keen_gene_pressure"],
         "heat_min_vo": 0, "heat_max_vo": 100,
         "cool_min_vo": 0, "cool_max_vo": 100,
         "fan_vo": 30,
@@ -41,6 +43,7 @@ ZONES = {
         "thermostat": "climate.keen_mbr_virtual_thermostat",
         "vents": ["cover.keen_mbr_1", "cover.keen_mbr_2"],
         "vent_type": "cover",
+        "health_sensors": ["sensor.keen_mbr_1_pressure", "sensor.keen_mbr_2_pressure"],
         "heat_min_vo": 0, "heat_max_vo": 100,
         "cool_min_vo": 0, "cool_max_vo": 100,
         "fan_vo": 30,
@@ -51,6 +54,7 @@ ZONES = {
         "thermostat": "climate.first_floor_virtual_thermostat",
         "vents": ["servo"],  # WiFi servo register at SERVO_SERVER
         "vent_type": "servo",
+        "health_sensors": [],  # servo has no health sensor
         "heat_min_vo": 0, "heat_max_vo": 45,  # servo max angle is 45 degrees
         "cool_min_vo": 0, "cool_max_vo": 45,
         "fan_vo": 15,  # ~33% of 45
@@ -76,6 +80,10 @@ HVAC_COMMANDS = {
 
 OUTDOOR_TEMP_ENTITY = "sensor.outdoor_temperature"
 STATE_ENTITY = "input_text.keenect_persisted_state"
+
+# Vent health check - if pressure sensor hasn't reported in this many seconds,
+# the vent is likely offline. Pressure reports every ~5 min, so 30 min = very stale.
+VENT_STALE_SECONDS = 1800  # 30 minutes
 
 # Keys persisted via input_text (survive HA restarts)
 _PERSIST_KEYS = [
@@ -670,6 +678,83 @@ def _update_status():
 
 
 # ---------------------------------------------------------------------------
+# Vent health check
+# ---------------------------------------------------------------------------
+def _check_vent_health():
+    """Detect stale Keen vents and re-send last commanded position."""
+    if not _enabled():
+        return
+
+    import datetime as dt_mod
+    utc_now = dt_mod.datetime.now(dt_mod.timezone.utc)
+    stale_vents = []
+
+    for zn, zone in ZONES.items():
+        health_sensors = zone.get("health_sensors", [])
+        if not health_sensors:
+            continue
+
+        for i, sensor_id in enumerate(health_sensors):
+            vent_id = zone["vents"][min(i, len(zone["vents"]) - 1)]
+            try:
+                s = state.get(sensor_id)
+
+                # Check if outright unavailable
+                if s in ("unavailable", "unknown", None):
+                    stale_vents.append((zn, vent_id, sensor_id, "unavailable"))
+                    continue
+
+                # Check staleness via last_updated timestamp
+                attrs = state.getattr(sensor_id)
+                last_updated = attrs.get("last_updated")
+                if last_updated is None:
+                    continue
+
+                dt = dt_mod.datetime.fromisoformat(str(last_updated))
+                age = (utc_now - dt).total_seconds()
+                if age > VENT_STALE_SECONDS:
+                    stale_vents.append((zn, vent_id, sensor_id,
+                                       f"stale {int(age / 60)}m"))
+            except Exception as e:
+                log.debug(f"keenect: health check error {sensor_id}: {e}")
+
+    if not stale_vents:
+        # Clear notification if vents recovered
+        try:
+            persistent_notification.dismiss(notification_id="keenect_stale_vents")
+        except Exception:
+            pass
+        return
+
+    # Re-send last commanded position to stale cover vents
+    for zn, vent_id, sensor_id, reason in stale_vents:
+        zone = ZONES[zn]
+        key = f"{zn}:{vent_id}"
+        last_level = _st["vent_levels"].get(key)
+        log.warning(f"keenect: vent {vent_id} ({zn}) {reason} "
+                    f"(sensor: {sensor_id})")
+
+        if last_level is not None and zone.get("vent_type") == "cover":
+            log.info(f"keenect: re-sending {vent_id} -> {last_level}%")
+            try:
+                cover.set_cover_position(entity_id=vent_id, position=last_level)
+            except Exception as e:
+                log.error(f"keenect: re-send to {vent_id} failed: {e}")
+
+    # Persistent notification in HA
+    vent_list = ", ".join(f"{vid} ({reason})" for _, vid, _, reason in stale_vents)
+    try:
+        persistent_notification.create(
+            title="Keenect: Stale Vent Detected",
+            message=f"Vents may be offline: {vent_list}. "
+                    f"Commands re-sent. Check Zigbee connectivity.",
+            notification_id="keenect_stale_vents",
+        )
+    except Exception as e:
+        log.error(f"keenect: notification failed: {e}")
+
+
+# ---------------------------------------------------------------------------
 # Pyscript triggers
 # ---------------------------------------------------------------------------
 
@@ -743,6 +828,12 @@ def periodic_consistency():
 @time_trigger("cron(*/3 * * * *)")
 def periodic_recirc():
     _check_recirc()
+
+
+@time_trigger("cron(*/10 * * * *)")
+def periodic_vent_health():
+    """Check vent health every 10 minutes."""
+    _check_vent_health()
 
 
 @time_trigger("cron(0 * * * *)")
