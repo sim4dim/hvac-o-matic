@@ -4,8 +4,9 @@ Replaces Hubitat KeenectLiteMaster + KeenectLiteZone
 
 Controls Keen smart vents via Hubitat integration (Zigbee radios on Hubitat).
 HVAC furnace controlled directly via HTTP to Flask server (bypasses Hubitat).
+First floor servo register controlled directly via HTTP (WiFi device).
 
-Version: 1.1.0
+Version: 1.2.0
 """
 
 import time as time_mod
@@ -47,8 +48,8 @@ ZONES = {
     },
     "first_floor": {
         "thermostat": "climate.first_floor_virtual_thermostat",
-        "vents": ["light.first_floor_register"],
-        "vent_type": "light",  # servo register controlled via brightness
+        "vents": ["servo"],  # WiFi servo register at SERVO_SERVER
+        "vent_type": "servo",
         "heat_min_vo": 0, "heat_max_vo": 100,
         "cool_min_vo": 0, "cool_max_vo": 100,
         "fan_vo": 30,
@@ -59,6 +60,8 @@ ZONES = {
 
 # HVAC Flask server - direct HTTP control (bypasses Hubitat driver)
 HVAC_SERVER = "http://192.168.1.123:5000"
+# Servo register - WiFi device, POST /move?angle=N
+SERVO_SERVER = "http://192.168.1.63"
 # Button-to-URL path mapping (matches HVACdriver.groovy push commands)
 HVAC_COMMANDS = {
     1: "/off",        # off
@@ -210,7 +213,12 @@ def _set_vent(zone_name, level):
             continue
 
         try:
-            if vtype == "light":
+            if vtype == "servo":
+                url = f"{SERVO_SERVER}/move?angle={level}"
+                log.info(f"keenect: servo POST {url}")
+                req = urllib.request.Request(url, data=b"", method="POST")
+                urllib.request.urlopen(req, timeout=5)
+            elif vtype == "light":
                 if level == 0:
                     light.turn_off(entity_id=vent_id)
                 else:
