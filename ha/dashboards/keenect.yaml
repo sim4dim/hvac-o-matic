@@ -21,7 +21,7 @@ views:
           - entity: input_boolean.enable_circulation
             name: Continuous Circulation
 
-      # Zone Cards
+      # Zone Cards - thermostat card shows temp, setpoint, and state
       - type: vertical-stack
         title: Ben's Room
         cards:
@@ -31,12 +31,6 @@ views:
             entities:
               - entity: cover.keen_ben
                 name: Vent
-              - entity: sensor.keen_ben_thermostat_temperature
-                name: Temperature
-              - entity: sensor.keen_ben_thermostat_heatingsetpoint
-                name: Heat Setpoint
-              - entity: sensor.keen_ben_thermostat_thermostatoperatingstate
-                name: State
               - entity: sensor.keen_ben_battery
                 name: Vent Battery
               - entity: sensor.keen_ben_pressure
@@ -51,12 +45,6 @@ views:
             entities:
               - entity: cover.keen_gene
                 name: Vent
-              - entity: sensor.keen_gene_thermostat_temperature
-                name: Temperature
-              - entity: sensor.keen_gene_thermostat_heatingsetpoint
-                name: Heat Setpoint
-              - entity: sensor.keen_gene_thermostat_thermostatoperatingstate
-                name: State
               - entity: sensor.keen_gene_battery
                 name: Vent Battery
               - entity: sensor.keen_gene_pressure
@@ -73,12 +61,6 @@ views:
                 name: Vent 1
               - entity: cover.keen_mbr_2
                 name: Vent 2
-              - entity: sensor.keen_mbr_virtual_thermostat_temperature
-                name: Temperature
-              - entity: sensor.keen_mbr_virtual_thermostat_heatingsetpoint
-                name: Heat Setpoint
-              - entity: sensor.keen_mbr_virtual_thermostat_thermostatoperatingstate
-                name: State
               - entity: sensor.keen_mbr_1_battery
                 name: Vent 1 Battery
               - entity: sensor.keen_mbr_2_battery
@@ -93,9 +75,3 @@ views:
             entities:
               - entity: light.first_floor_register
                 name: Register
-              - entity: sensor.first_floor_virtual_thermostat_temperature
-                name: Temperature
-              - entity: sensor.first_floor_virtual_thermostat_heatingsetpoint
-                name: Heat Setpoint
-              - entity: sensor.first_floor_virtual_thermostat_thermostatoperatingstate
-                name: State

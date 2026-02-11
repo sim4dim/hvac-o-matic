@@ -19,10 +19,6 @@ ZONES = {
         "thermostat": "climate.keen_ben_thermostat",
         "vents": ["cover.keen_ben"],
         "vent_type": "cover",
-        "temp_sensor": "sensor.keen_ben_thermostat_temperature",
-        "heat_sp_sensor": "sensor.keen_ben_thermostat_heatingsetpoint",
-        "cool_sp_sensor": "sensor.keen_ben_thermostat_coolingsetpoint",
-        "op_state_sensor": "sensor.keen_ben_thermostat_thermostatoperatingstate",
         "heat_min_vo": 0, "heat_max_vo": 100,
         "cool_min_vo": 0, "cool_max_vo": 100,
         "fan_vo": 30,
@@ -33,10 +29,6 @@ ZONES = {
         "thermostat": "climate.keen_gene_thermostat",
         "vents": ["cover.keen_gene"],
         "vent_type": "cover",
-        "temp_sensor": "sensor.keen_gene_thermostat_temperature",
-        "heat_sp_sensor": "sensor.keen_gene_thermostat_heatingsetpoint",
-        "cool_sp_sensor": "sensor.keen_gene_thermostat_coolingsetpoint",
-        "op_state_sensor": "sensor.keen_gene_thermostat_thermostatoperatingstate",
         "heat_min_vo": 0, "heat_max_vo": 100,
         "cool_min_vo": 0, "cool_max_vo": 100,
         "fan_vo": 30,
@@ -47,10 +39,6 @@ ZONES = {
         "thermostat": "climate.keen_mbr_virtual_thermostat",
         "vents": ["cover.keen_mbr_1", "cover.keen_mbr_2"],
         "vent_type": "cover",
-        "temp_sensor": "sensor.keen_mbr_virtual_thermostat_temperature",
-        "heat_sp_sensor": "sensor.keen_mbr_virtual_thermostat_heatingsetpoint",
-        "cool_sp_sensor": "sensor.keen_mbr_virtual_thermostat_coolingsetpoint",
-        "op_state_sensor": "sensor.keen_mbr_virtual_thermostat_thermostatoperatingstate",
         "heat_min_vo": 0, "heat_max_vo": 100,
         "cool_min_vo": 0, "cool_max_vo": 100,
         "fan_vo": 30,
@@ -61,10 +49,6 @@ ZONES = {
         "thermostat": "climate.first_floor_virtual_thermostat",
         "vents": ["light.first_floor_register"],
         "vent_type": "light",  # servo register controlled via brightness
-        "temp_sensor": "sensor.first_floor_virtual_thermostat_temperature",
-        "heat_sp_sensor": "sensor.first_floor_virtual_thermostat_heatingsetpoint",
-        "cool_sp_sensor": "sensor.first_floor_virtual_thermostat_coolingsetpoint",
-        "op_state_sensor": "sensor.first_floor_virtual_thermostat_thermostatoperatingstate",
         "heat_min_vo": 0, "heat_max_vo": 100,
         "cool_min_vo": 0, "cool_max_vo": 100,
         "fan_vo": 30,
@@ -267,21 +251,39 @@ def _calc_opening(zone_name, zstate, temp, setpoint):
 # ---------------------------------------------------------------------------
 # Zone evaluation
 # ---------------------------------------------------------------------------
+def _get_climate_attr(entity_id, attr, default=None):
+    """Read a climate entity attribute."""
+    val = state.getattr(entity_id).get(attr)
+    if val is None:
+        return default
+    try:
+        return float(val) if isinstance(val, (int, float)) else val
+    except (ValueError, TypeError):
+        return default
+
+
 def _eval_zone(zone_name):
     zone = ZONES[zone_name]
-    temp = _float(zone["temp_sensor"])
-    heat_sp = _float(zone["heat_sp_sensor"])
-    cool_sp = _float(zone["cool_sp_sensor"])
-    op_raw = state.get(zone["op_state_sensor"])
+    tstat = zone["thermostat"]
+
+    # Read from climate entity attributes (always available, no extra sensors needed)
+    temp = _get_climate_attr(tstat, "current_temperature")
+    heat_sp = _get_climate_attr(tstat, "temperature")  # target temp in heat mode
+    cool_sp = _get_climate_attr(tstat, "target_temp_high")  # target in cool mode
+    # If heat_cool mode, use target_temp_low for heat
+    target_low = _get_climate_attr(tstat, "target_temp_low")
+    if target_low is not None:
+        heat_sp = target_low
+    op_raw = _get_climate_attr(tstat, "hvac_action")
 
     if temp is None:
         return
 
     # Keenect offsets: heat_sp + 1, cool_sp - 1
-    zheat = (heat_sp + 1) if heat_sp is not None else None
-    zcool = (cool_sp - 1) if cool_sp is not None else None
+    zheat = (float(heat_sp) + 1) if heat_sp is not None else None
+    zcool = (float(cool_sp) - 1) if cool_sp is not None else None
 
-    op = (op_raw or "idle").upper()
+    op = (str(op_raw) if op_raw else "idle").upper()
     if op not in ("HEATING", "COOLING", "FAN ONLY", "IDLE"):
         op = "IDLE"
 
@@ -444,39 +446,14 @@ def periodic_eval():
 
 
 @state_trigger(
-    "sensor.keen_ben_thermostat_thermostatoperatingstate",
-    "sensor.keen_gene_thermostat_thermostatoperatingstate",
-    "sensor.keen_mbr_virtual_thermostat_thermostatoperatingstate",
-    "sensor.first_floor_virtual_thermostat_thermostatoperatingstate",
+    "climate.keen_ben_thermostat",
+    "climate.keen_gene_thermostat",
+    "climate.keen_mbr_virtual_thermostat",
+    "climate.first_floor_virtual_thermostat",
 )
-def on_op_state_change(**kwargs):
-    """React to thermostat operating state changes."""
-    log.info(f"keenect: thermostat state change {kwargs.get('var_name')}")
-    _eval_master()
-
-
-@state_trigger(
-    "sensor.keen_ben_thermostat_temperature",
-    "sensor.keen_gene_thermostat_temperature",
-    "sensor.keen_mbr_virtual_thermostat_temperature",
-    "sensor.first_floor_virtual_thermostat_temperature",
-)
-def on_temp_change(**kwargs):
-    _eval_master()
-
-
-@state_trigger(
-    "sensor.keen_ben_thermostat_heatingsetpoint",
-    "sensor.keen_ben_thermostat_coolingsetpoint",
-    "sensor.keen_gene_thermostat_heatingsetpoint",
-    "sensor.keen_gene_thermostat_coolingsetpoint",
-    "sensor.keen_mbr_virtual_thermostat_heatingsetpoint",
-    "sensor.keen_mbr_virtual_thermostat_coolingsetpoint",
-    "sensor.first_floor_virtual_thermostat_heatingsetpoint",
-    "sensor.first_floor_virtual_thermostat_coolingsetpoint",
-)
-def on_setpoint_change(**kwargs):
-    log.info(f"keenect: setpoint change {kwargs.get('var_name')}")
+def on_climate_change(**kwargs):
+    """React to any climate entity changes (state, temp, setpoint, hvac_action)."""
+    log.info(f"keenect: climate change {kwargs.get('var_name')}")
     _eval_master()
 
 
