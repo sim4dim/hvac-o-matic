@@ -51,9 +51,9 @@ ZONES = {
         "thermostat": "climate.first_floor_virtual_thermostat",
         "vents": ["servo"],  # WiFi servo register at SERVO_SERVER
         "vent_type": "servo",
-        "heat_min_vo": 0, "heat_max_vo": 100,
-        "cool_min_vo": 0, "cool_max_vo": 100,
-        "fan_vo": 30,
+        "heat_min_vo": 0, "heat_max_vo": 45,  # servo max angle is 45 degrees
+        "cool_min_vo": 0, "cool_max_vo": 45,
+        "fan_vo": 15,  # ~33% of 45
         "vent_control": "Normal",
         "exclude_recirc": False,
     },
@@ -207,17 +207,26 @@ def _circ_enabled():
 # HVAC furnace control
 # ---------------------------------------------------------------------------
 def _hvac_push(button):
-    """Send HVAC command directly to Flask server."""
+    """Send HVAC command directly to Flask server with retry."""
     path = HVAC_COMMANDS.get(button)
     if path is None:
         log.error(f"keenect: unknown HVAC button {button}")
-        return
+        return False
     url = f"{HVAC_SERVER}/0{path}"
-    log.info(f"keenect: HVAC GET {url}")
-    try:
-        urllib.request.urlopen(url, timeout=5)
-    except Exception as e:
-        log.error(f"keenect: HVAC command failed: {e}")
+    for attempt in range(3):
+        try:
+            urllib.request.urlopen(url, timeout=5)
+            if attempt > 0:
+                log.info(f"keenect: HVAC GET {url} (retry {attempt} ok)")
+            else:
+                log.info(f"keenect: HVAC GET {url}")
+            return True
+        except Exception as e:
+            log.warning(f"keenect: HVAC {url} attempt {attempt+1} failed: {e}")
+            if attempt < 2:
+                time_mod.sleep(1)
+    log.error(f"keenect: HVAC command {url} FAILED after 3 attempts")
+    return False
 
 
 def _hvac_turn_on():
@@ -226,18 +235,28 @@ def _hvac_turn_on():
     if mode == "OFF":
         log.info("keenect: HVAC mode OFF, ignoring on request")
         return
+    # If already on in a different mode, turn off first
+    if _st["hvac_on"] and (
+        (mode == "HEAT" and _st["main_state"] == "COOLING") or
+        (mode == "COOL" and _st["main_state"] == "HEATING")
+    ):
+        log.info(f"keenect: mode mismatch ({_st['main_state']} -> {mode}), turning off first")
+        _hvac_turn_off()
+
     # Cancel any pending vent closure
     _st["hvac_off_time"] = None
     _st["vents_closed_after_off"] = True
 
     if mode == "HEAT":
-        _hvac_push(2)   # heatOn
-        _hvac_push(6)   # fanOn
+        ok = _hvac_push(2)   # heatOn
+        _hvac_push(6)        # fanOn
         _st["main_state"] = "HEATING"
     elif mode == "COOL":
-        _hvac_push(4)   # coolOn
-        _hvac_push(6)   # fanOn
+        ok = _hvac_push(4)   # coolOn
+        _hvac_push(6)        # fanOn
         _st["main_state"] = "COOLING"
+    else:
+        return
     _st["hvac_on"] = True
     log.info(f"keenect: HVAC ON in {mode} mode")
 
@@ -288,9 +307,20 @@ def _set_vent(zone_name, level):
         try:
             if vtype == "servo":
                 url = f"{SERVO_SERVER}/move?angle={level}"
-                log.info(f"keenect: servo POST {url}")
-                req = urllib.request.Request(url, data=b"", method="POST")
-                urllib.request.urlopen(req, timeout=5)
+                ok = False
+                for attempt in range(3):
+                    try:
+                        req = urllib.request.Request(url, data=b"", method="POST")
+                        urllib.request.urlopen(req, timeout=5)
+                        ok = True
+                        break
+                    except Exception as e2:
+                        log.warning(f"keenect: servo {url} attempt {attempt+1}: {e2}")
+                        if attempt < 2:
+                            time_mod.sleep(1)
+                if not ok:
+                    log.error(f"keenect: servo {url} FAILED after 3 attempts")
+                    continue
             elif vtype == "light":
                 if level == 0:
                     light.turn_off(entity_id=vent_id)
@@ -534,6 +564,15 @@ def _check_consistency():
         log.warning("keenect: consistency - all idle but HVAC on, forcing off")
         _hvac_turn_off()
         _save_if_changed()
+    # Guard against stale hvac_off_time (e.g., from restored state with old timestamp)
+    if _st["hvac_off_time"] is not None and not _st["vents_closed_after_off"]:
+        age = time_mod.time() - _st["hvac_off_time"]
+        if age > 600:  # 10 minutes - way past any reasonable delay
+            log.warning(f"keenect: consistency - stale hvac_off_time ({age:.0f}s), closing vents")
+            _close_all_vents()
+            _st["vents_closed_after_off"] = True
+            _st["hvac_off_time"] = None
+            _save_if_changed()
 
 
 # ---------------------------------------------------------------------------
@@ -581,6 +620,9 @@ def on_mode_change(**kwargs):
         _close_all_vents()
         _save_if_changed()
     else:
+        # Mode changed (HEAT<->COOL): turn off first if running in the other mode
+        if _st["hvac_on"]:
+            _hvac_turn_off()
         _eval_master()
 
 
