@@ -1,0 +1,128 @@
+esphome:
+  name: hvac-1st-floor
+  friendly_name: "HVAC 1st Floor Register"
+
+esp32:
+  board: heltec_wifi_kit_32
+  framework:
+    type: arduino
+
+wifi:
+  ssid: "easy"
+  password: "YOUR_WIFI_PASSWORD"
+  manual_ip:
+    static_ip: 192.168.1.63
+    gateway: 192.168.1.1
+    subnet: 255.255.255.0
+
+  ap:
+    ssid: "HVAC-1stFloor-Fallback"
+    password: "hvacfallback"
+
+captive_portal:
+
+logger:
+
+api:
+  encryption:
+    key: !secret api_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+# REST API - allows Hubitat (or anything) to control via HTTP
+# Native endpoint: POST /number/servo_angle/set?value=45
+# Legacy endpoint: POST /move?angle=45 (backward compatible with old firmware)
+web_server:
+  port: 80
+
+# I2C for OLED - Heltec WiFi Kit 32 pins
+i2c:
+  sda: GPIO4
+  scl: GPIO15
+
+# OLED Display - SSD1306 128x64
+display:
+  - platform: ssd1306_i2c
+    model: "SSD1306 128x64"
+    reset_pin: GPIO16
+    address: 0x3C
+    update_interval: 5s
+    lambda: |-
+      it.printf(0, 0, id(font_small), "HVAC 1st Floor");
+      it.printf(0, 16, id(font_small), "IP: %s", WiFi.localIP().toString().c_str());
+      it.printf(0, 32, id(font_large), "Angle: %.0f°", id(servo_angle).state);
+      if (id(vent_servo).state == 0) {
+        it.printf(0, 52, id(font_small), "CLOSED");
+      } else {
+        it.printf(0, 52, id(font_small), "OPEN");
+      }
+
+font:
+  - file: "gfonts://Roboto"
+    id: font_small
+    size: 12
+  - file: "gfonts://Roboto"
+    id: font_large
+    size: 16
+
+# Servo output on GPIO13
+output:
+  - platform: ledc
+    pin: GPIO13
+    id: servo_pwm
+    frequency: 50Hz
+
+servo:
+  - id: vent_servo
+    output: servo_pwm
+    auto_detach_time: 3s
+    transition_length: 2s
+
+# Number entity for HA control - 0 to 45 degrees
+number:
+  - platform: template
+    name: "Servo Angle"
+    id: servo_angle
+    min_value: 0
+    max_value: 45
+    step: 1
+    unit_of_measurement: "°"
+    icon: "mdi:rotate-right"
+    optimistic: true
+    restore_value: true
+    set_action:
+      - servo.write:
+          id: vent_servo
+          # ESPHome servo: -1.0 = 0°, 1.0 = 180°
+          # Map 0-45° to the -1.0 to -0.5 range
+          level: !lambda "return (x / 90.0) - 1.0;"
+      - logger.log:
+          format: "Servo angle set to %.0f°"
+          args: ['x']
+
+# Binary sensor for open/closed state
+binary_sensor:
+  - platform: template
+    name: "Register Open"
+    icon: "mdi:air-filter"
+    lambda: |-
+      return id(servo_angle).state > 0;
+
+# Diagnostic sensors
+sensor:
+  - platform: wifi_signal
+    name: "WiFi Signal"
+    update_interval: 60s
+  - platform: uptime
+    name: "Uptime"
+
+button:
+  - platform: restart
+    name: "Restart"
+
+text_sensor:
+  - platform: wifi_info
+    ip_address:
+      name: "IP Address"
