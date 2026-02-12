@@ -1,0 +1,313 @@
+esphome:
+  name: hvac-controller
+  friendly_name: "HVAC Controller"
+
+esp32:
+  board: esp32dev
+  variant: esp32
+  framework:
+    type: esp-idf
+
+wifi:
+  ssid: !secret hvac_wifi_ssid
+  password: !secret hvac_wifi_password
+  power_save_mode: none
+  ap:
+    ssid: "HVAC-Controller-Fallback"
+    password: "hvacfallback"
+
+logger:
+  level: INFO
+
+api:
+  id: ha_api
+  encryption:
+    key: !secret hvac_api_key
+  on_client_connected:
+    - globals.set:
+        id: last_api_time
+        value: !lambda "return millis();"
+    - globals.set:
+        id: watchdog_tripped
+        value: "false"
+  on_client_disconnected:
+    - logger.log: "API client disconnected - watchdog timer active"
+
+ota:
+  - platform: esphome
+    password: !secret hvac_ota_password
+
+# ---------------------------------------------------------------------------
+# Globals for watchdog and display state
+# ---------------------------------------------------------------------------
+globals:
+  - id: last_api_time
+    type: uint32_t
+    restore_value: false
+    initial_value: "0"
+  - id: watchdog_tripped
+    type: bool
+    restore_value: false
+    initial_value: "false"
+  - id: display_page
+    type: uint8_t
+    restore_value: false
+    initial_value: "0"
+
+# ---------------------------------------------------------------------------
+# Watchdog: enter bypass after 60 min with no API connection
+# ---------------------------------------------------------------------------
+interval:
+  - interval: 30s
+    then:
+      - lambda: |-
+          // Skip watchdog until first API connection
+          if (id(last_api_time) == 0) return;
+          if (id(watchdog_tripped)) return;
+          if (id(ha_api).is_connected()) {
+            id(last_api_time) = millis();
+            return;
+          }
+          uint32_t elapsed = millis() - id(last_api_time);
+          if (elapsed > 3600000) {  // 60 minutes
+            ESP_LOGW("watchdog", "No API for 60 min - entering bypass");
+            id(watchdog_tripped) = true;
+            id(bypass_sw).turn_on();
+          }
+  # Display page toggle
+  - interval: 5s
+    then:
+      - lambda: "id(display_page) = 1 - id(display_page);"
+
+# ---------------------------------------------------------------------------
+# I2C bus - shared by BME280, BME680, SSD1306
+# ---------------------------------------------------------------------------
+i2c:
+  sda: GPIO21
+  scl: GPIO22
+  frequency: 400kHz
+
+# ---------------------------------------------------------------------------
+# Relay switches with safety interlocks
+# ---------------------------------------------------------------------------
+switch:
+  # HEAT and COOL are interlocked - cannot be on simultaneously
+  - platform: gpio
+    pin: GPIO13
+    name: "Heat"
+    id: heat_sw
+    icon: "mdi:fire"
+    restore_mode: ALWAYS_OFF
+    interlock: [heat_sw, cool_sw]
+    interlock_wait_time: 500ms
+    on_turn_on:
+      - switch.turn_on: fan_sw
+      - switch.turn_on: uv_sw
+    on_turn_off:
+      - lambda: |-
+          if (!id(cool_sw).state && !id(fan_sw).state) {
+            id(uv_sw).turn_off();
+          }
+
+  - platform: gpio
+    pin: GPIO12
+    name: "Cool"
+    id: cool_sw
+    icon: "mdi:snowflake"
+    restore_mode: ALWAYS_OFF
+    interlock: [heat_sw, cool_sw]
+    interlock_wait_time: 500ms
+    on_turn_on:
+      - switch.turn_on: fan_sw
+      - switch.turn_on: uv_sw
+    on_turn_off:
+      - lambda: |-
+          if (!id(heat_sw).state && !id(fan_sw).state) {
+            id(uv_sw).turn_off();
+          }
+
+  - platform: gpio
+    pin: GPIO14
+    name: "Fan"
+    id: fan_sw
+    icon: "mdi:fan"
+    restore_mode: ALWAYS_OFF
+    on_turn_on:
+      - switch.turn_on: uv_sw
+    on_turn_off:
+      - lambda: |-
+          if (!id(heat_sw).state && !id(cool_sw).state) {
+            id(uv_sw).turn_off();
+          }
+
+  - platform: gpio
+    pin: GPIO26
+    name: "UV"
+    id: uv_sw
+    icon: "mdi:lightbulb-alert"
+    restore_mode: ALWAYS_OFF
+
+  - platform: gpio
+    pin: GPIO27
+    name: "Bypass"
+    id: bypass_sw
+    icon: "mdi:gate-open"
+    restore_mode: ALWAYS_OFF
+    on_turn_on:
+      # Bypass: kill all other relays, turn on warning LED
+      - switch.turn_off: heat_sw
+      - switch.turn_off: cool_sw
+      - switch.turn_off: fan_sw
+      - switch.turn_off: uv_sw
+      - output.turn_on: warning_led
+    on_turn_off:
+      - output.turn_off: warning_led
+
+  - platform: restart
+    name: "Restart"
+
+# ---------------------------------------------------------------------------
+# Warning LED
+# ---------------------------------------------------------------------------
+output:
+  - platform: gpio
+    pin: GPIO23
+    id: warning_led
+
+# ---------------------------------------------------------------------------
+# Bypass button (GPIO0)
+# ---------------------------------------------------------------------------
+binary_sensor:
+  - platform: gpio
+    pin:
+      number: GPIO0
+      mode: INPUT_PULLUP
+      inverted: true
+    name: "Bypass Button"
+    icon: "mdi:button-pointer"
+    filters:
+      - delayed_on: 50ms
+      - delayed_off: 50ms
+    on_press:
+      then:
+        - switch.toggle: bypass_sw
+
+  - platform: status
+    name: "Status"
+
+# ---------------------------------------------------------------------------
+# Environmental sensors
+# ---------------------------------------------------------------------------
+sensor:
+  # Supply duct - BME280 at 0x76
+  - platform: bme280_i2c
+    address: 0x76
+    update_interval: 30s
+    temperature:
+      name: "Supply Temperature"
+      id: supply_temp
+    humidity:
+      name: "Supply Humidity"
+      id: supply_hum
+    pressure:
+      name: "Supply Pressure"
+      id: supply_pres
+
+  # Return duct - BME680 at 0x77
+  - platform: bme680
+    address: 0x77
+    update_interval: 30s
+    temperature:
+      name: "Return Temperature"
+      id: return_temp
+    humidity:
+      name: "Return Humidity"
+      id: return_hum
+    pressure:
+      name: "Return Pressure"
+      id: return_pres
+    gas_resistance:
+      name: "Return VOC"
+      id: return_voc
+      filters:
+        - multiply: 0.001  # Ohm -> kOhm
+
+  # Computed: pressure delta (supply - return)
+  - platform: template
+    name: "Pressure Delta"
+    id: pressure_delta
+    unit_of_measurement: "hPa"
+    icon: "mdi:gauge"
+    lambda: |-
+      if (id(supply_pres).has_state() && id(return_pres).has_state()) {
+        return id(supply_pres).state - id(return_pres).state;
+      }
+      return {};
+    update_interval: 30s
+
+  # Diagnostics
+  - platform: wifi_signal
+    name: "WiFi Signal"
+    update_interval: 60s
+  - platform: uptime
+    name: "Uptime"
+  - platform: internal_temperature
+    name: "ESP32 Temperature"
+    update_interval: 60s
+
+# ---------------------------------------------------------------------------
+# Display - SSD1306 128x64 OLED
+# ---------------------------------------------------------------------------
+font:
+  - file: "gfonts://Roboto"
+    id: font1
+    size: 12
+
+display:
+  - platform: ssd1306_i2c
+    model: "SSD1306 128x64"
+    address: 0x3C
+    update_interval: 5s
+    lambda: |-
+      if (id(display_page) == 0) {
+        // Status screen
+        it.printf(0, 0, id(font1), "HVAC Controller");
+        it.printf(0, 14, id(font1), "HEAT:%s COOL:%s",
+          id(heat_sw).state ? "ON" : "--",
+          id(cool_sw).state ? "ON" : "--");
+        it.printf(0, 28, id(font1), "FAN:%s  UV:%s",
+          id(fan_sw).state ? "ON" : "--",
+          id(uv_sw).state ? "ON" : "--");
+        if (id(bypass_sw).state) {
+          it.printf(0, 42, id(font1), "** BYPASS **");
+        } else {
+          it.printf(0, 42, id(font1), "Bypass: OFF");
+        }
+        it.printf(0, 54, id(font1), "IP: %s", id(ip_addr).state.c_str());
+      } else {
+        // Sensor screen
+        if (id(supply_temp).has_state()) {
+          it.printf(0, 0, id(font1), "Sup: %.1fF %.0f%%",
+            id(supply_temp).state, id(supply_hum).state);
+        } else {
+          it.printf(0, 0, id(font1), "Sup: --");
+        }
+        if (id(return_temp).has_state()) {
+          it.printf(0, 14, id(font1), "Ret: %.1fF %.0f%%",
+            id(return_temp).state, id(return_hum).state);
+        } else {
+          it.printf(0, 14, id(font1), "Ret: --");
+        }
+        if (id(pressure_delta).has_state()) {
+          it.printf(0, 28, id(font1), "dP: %.1f hPa", id(pressure_delta).state);
+        }
+        if (id(return_voc).has_state()) {
+          it.printf(0, 42, id(font1), "VOC: %.1f kOhm", id(return_voc).state);
+        }
+      }
+
+text_sensor:
+  - platform: wifi_info
+    ip_address:
+      id: ip_addr
+      name: "IP Address"

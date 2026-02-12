@@ -10,10 +10,18 @@ views:
         entities:
           - entity: input_boolean.keenect_enabled
             name: Keenect Enabled
+            tap_action:
+              action: toggle
+              confirmation:
+                text: "Toggle Keenect system on/off?"
           - entity: sensor.keenect_status
             name: Status
           - entity: input_select.hvac_mode
             name: HVAC Mode
+            tap_action:
+              action: more-info
+              confirmation:
+                text: "Change HVAC mode?"
           - entity: input_number.cool_lockout_temp
             name: Cool Lockout Temp
           - entity: input_number.keenect_hysteresis
@@ -22,10 +30,18 @@ views:
             name: Vent Closure Delay
           - entity: input_boolean.enable_recirculation
             name: Smart Recirculation
+            tap_action:
+              action: toggle
+              confirmation:
+                text: "Toggle smart recirculation?"
           - entity: input_number.recirculation_delay
             name: Recirculation Delay
           - entity: input_boolean.enable_circulation
             name: Continuous Circulation
+            tap_action:
+              action: toggle
+              confirmation:
+                text: "Toggle continuous circulation?"
 
       # Zone Cards - thermostat card shows temp, setpoint, and state
       - type: vertical-stack
@@ -41,8 +57,6 @@ views:
                 name: Vent Level
               - entity: sensor.keen_ben_battery
                 name: Vent Battery
-              - entity: sensor.keen_ben_pressure
-                name: Vent Pressure
 
       - type: vertical-stack
         title: Gene's Room
@@ -57,8 +71,6 @@ views:
                 name: Vent Level
               - entity: sensor.keen_gene_battery
                 name: Vent Battery
-              - entity: sensor.keen_gene_pressure
-                name: Vent Pressure
 
       - type: vertical-stack
         title: Master Bedroom
@@ -77,10 +89,6 @@ views:
                 name: Vent 1 Battery
               - entity: sensor.keen_mbr_2_battery
                 name: Vent 2 Battery
-              - entity: sensor.keen_mbr_1_pressure
-                name: Vent 1 Pressure
-              - entity: sensor.keen_mbr_2_pressure
-                name: Vent 2 Pressure
 
       - type: vertical-stack
         title: First Floor
@@ -90,7 +98,7 @@ views:
           - type: entities
             entities:
               - entity: sensor.keenect_vent_first_floor
-                name: Servo Angle
+                name: Vent Level
 
   - title: History
     path: history

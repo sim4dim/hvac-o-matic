@@ -78,6 +78,19 @@ HVAC_COMMANDS = {
     7: "/FAN/off",    # fanOff
 }
 
+# MQTT mirror - publish relay state for test controller to shadow
+HVAC_MQTT_TOPIC = "hvac/mirror"
+# Maps button commands to relay states after the command
+HVAC_MQTT_MAP = {
+    1: {"heat": "OFF", "cool": "OFF", "fan": "OFF"},  # all off
+    2: {"heat": "ON"},     # heatOn
+    3: {"heat": "OFF"},    # heatOff
+    4: {"cool": "ON"},     # coolOn
+    5: {"cool": "OFF"},    # coolOff
+    6: {"fan": "ON"},      # fanOn
+    7: {"fan": "OFF"},     # fanOff
+}
+
 OUTDOOR_TEMP_ENTITY = "sensor.outdoor_temperature"
 STATE_ENTITY = "input_text.keenect_persisted_state"
 
@@ -249,6 +262,7 @@ def _hvac_push(button):
                 log.info(f"keenect: HVAC GET {url} (retry {attempt} ok)")
             else:
                 log.info(f"keenect: HVAC GET {url}")
+            _hvac_mqtt_mirror(button)
             return True
         except Exception as e:
             log.warning(f"keenect: HVAC {url} attempt {attempt+1} failed: {e}")
@@ -256,6 +270,18 @@ def _hvac_push(button):
                 task.sleep(1)
     log.error(f"keenect: HVAC command {url} FAILED after 3 attempts")
     return False
+
+
+def _hvac_mqtt_mirror(button):
+    """Publish relay states to MQTT for test controller to shadow."""
+    states = HVAC_MQTT_MAP.get(button)
+    if not states:
+        return
+    try:
+        payload = json_mod.dumps(states)
+        mqtt.publish(topic=f"{HVAC_MQTT_TOPIC}/command", payload=payload, retain=True)
+    except Exception as e:
+        log.warning(f"keenect: MQTT mirror failed: {e}")
 
 
 def _outdoor_temp():
@@ -652,22 +678,22 @@ def _update_status():
                 except Exception:
                     level = max(level, 0)
             elif vtype == "number":
-                # ESPHome number entity - read actual state
+                # ESPHome number entity - read actual state, map 0-45° to 0-100%
                 try:
                     val = _float(vent_id, 0)
-                    level = max(level, int(val))
+                    max_angle = zone.get("heat_max_vo", 45)
+                    pct = round(val * 100 / max_angle) if max_angle > 0 else 0
+                    level = max(level, min(100, pct))
                 except Exception:
                     key = f"{zn}:{vent_id}"
-                    level = max(level, _st["vent_levels"].get(key, 0))
+                    raw = _st["vent_levels"].get(key, 0)
+                    max_angle = zone.get("heat_max_vo", 45)
+                    pct = round(raw * 100 / max_angle) if max_angle > 0 else 0
+                    level = max(level, min(100, pct))
 
-        if zone.get("vent_type") == "number":
-            name = f"Keenect {zn.replace('_', ' ').title()} Servo"
-            unit = "°"
-            icon = "mdi:rotate-right"
-        else:
-            name = f"Keenect {zn.replace('_', ' ').title()} Vent"
-            unit = "%"
-            icon = "mdi:air-filter"
+        name = f"Keenect {zn.replace('_', ' ').title()} Vent"
+        unit = "%"
+        icon = "mdi:air-filter"
 
         state.set(f"sensor.keenect_vent_{zn}", level, {
             "friendly_name": name,
