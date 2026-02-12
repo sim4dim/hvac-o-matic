@@ -37,6 +37,45 @@ ota:
   - platform: esphome
     password: !secret hvac_ota_password
 
+# ---------------------------------------------------------------------------
+# Globals for display screensaver
+# ---------------------------------------------------------------------------
+globals:
+  - id: display_mode
+    type: uint8_t
+    restore_value: false
+    initial_value: "0"  # 0=screensaver, 1=full info
+  - id: saver_x
+    type: uint8_t
+    restore_value: false
+    initial_value: "10"
+  - id: saver_y
+    type: uint8_t
+    restore_value: false
+    initial_value: "20"
+
+# ---------------------------------------------------------------------------
+# Display cycling: full info 5s every 30s, screensaver the rest
+# ---------------------------------------------------------------------------
+interval:
+  - interval: 30s
+    then:
+      - globals.set:
+          id: display_mode
+          value: "1"
+      - delay: 5s
+      - globals.set:
+          id: display_mode
+          value: "0"
+  - interval: 3s
+    then:
+      - lambda: |-
+          // Randomize screensaver position (font_large ~50px wide, 16px tall)
+          if (id(display_mode) == 0) {
+            id(saver_x) = esp_random() % 78;
+            id(saver_y) = esp_random() % 48;
+          }
+
 i2c:
   sda: GPIO17
   scl: GPIO18
@@ -50,15 +89,22 @@ display:
     reset_pin: GPIO21
     flip_x: false
     flip_y: false
-    update_interval: 5s
+    update_interval: 2s
     lambda: |-
-      it.printf(0, 0, id(font_small), "HVAC 1st Floor");
-      it.printf(0, 16, id(font_small), "IP: %s", id(ip_address).state.c_str());
-      it.printf(0, 32, id(font_large), "Angle: %.0f", id(servo_angle).state);
-      if (id(servo_angle).state == 0) {
-        it.printf(0, 52, id(font_small), "CLOSED");
+      if (id(display_mode) == 1) {
+        // Full info screen - shown 5s every 30s
+        it.printf(0, 0, id(font_small), "HVAC 1st Floor");
+        it.printf(0, 16, id(font_small), "IP: %s", id(ip_address).state.c_str());
+        it.printf(0, 32, id(font_large), "Angle: %.0f", id(servo_angle).state);
+        if (id(servo_angle).state == 0) {
+          it.printf(0, 52, id(font_small), "CLOSED");
+        } else {
+          it.printf(0, 52, id(font_small), "OPEN");
+        }
       } else {
-        it.printf(0, 52, id(font_small), "OPEN");
+        // Screensaver - angle at random position to prevent burn-in
+        it.printf(id(saver_x), id(saver_y), id(font_large), "%.0f%s",
+          id(servo_angle).state, id(servo_angle).state == 0 ? " CL" : "\xC2\xB0");
       }
 
 font:
