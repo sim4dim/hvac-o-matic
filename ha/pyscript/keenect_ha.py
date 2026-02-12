@@ -4,9 +4,9 @@ Replaces Hubitat KeenectLiteMaster + KeenectLiteZone
 
 Controls Keen smart vents via Hubitat integration (Zigbee radios on Hubitat).
 HVAC furnace controlled directly via HTTP to Flask server (bypasses Hubitat).
-First floor servo register controlled directly via HTTP (WiFi device).
+First floor servo register controlled via ESPHome native API (number entity).
 
-Version: 1.3.0
+Version: 1.4.0
 """
 
 import datetime as dt_mod
@@ -53,9 +53,9 @@ ZONES = {
     },
     "first_floor": {
         "thermostat": "climate.first_floor_virtual_thermostat",
-        "vents": ["servo"],  # WiFi servo register at SERVO_SERVER
-        "vent_type": "servo",
-        "health_sensors": [],  # servo has no health sensor
+        "vents": ["number.hvac_1st_floor_register_servo_angle"],
+        "vent_type": "number",
+        "health_sensors": [],
         "heat_min_vo": 0, "heat_max_vo": 45,  # servo max angle is 45 degrees
         "cool_min_vo": 0, "cool_max_vo": 45,
         "fan_vo": 15,  # ~33% of 45
@@ -66,8 +66,7 @@ ZONES = {
 
 # HVAC Flask server - direct HTTP control (bypasses Hubitat driver)
 HVAC_SERVER = "http://192.168.1.123:5000"
-# Servo register - WiFi device, POST /move?angle=N
-SERVO_SERVER = "http://192.168.1.63"
+# Servo register now controlled via ESPHome native API (number entity)
 # Button-to-URL path mapping (matches HVACdriver.groovy push commands)
 HVAC_COMMANDS = {
     1: "/off",        # off
@@ -121,10 +120,10 @@ def _persist_snapshot():
 def _save_state():
     """Persist critical state to an HA input_text entity."""
     # Use compact keys to fit in 255 chars
-    # Collect servo vent levels (covers report their own state)
+    # Collect number/servo vent levels (lights report their own state)
     sv = {}
     for zn, zone in ZONES.items():
-        if zone.get("vent_type") == "servo":
+        if zone.get("vent_type") in ("servo", "number"):
             for vid in zone["vents"]:
                 key = f"{zn}:{vid}"
                 val = _st["vent_levels"].get(key)
@@ -174,7 +173,7 @@ def _load_state():
         }
         _st["hvac_off_time"] = data.get("ot")
         _st["vents_closed_after_off"] = bool(data.get("vc", 1))
-        # Restore servo vent levels (covers report their own state)
+        # Restore number/servo vent levels (lights report their own state)
         for key, val in data.get("sv", {}).items():
             _st["vent_levels"][key] = val
         _st["_last_persisted"] = _persist_snapshot()
@@ -335,8 +334,9 @@ def _hvac_turn_off():
 def _set_vent(zone_name, level):
     """Set vent opening for a zone (0-100)."""
     zone = ZONES[zone_name]
-    level = max(0, min(100, int(level)))
     vtype = zone.get("vent_type", "light")
+    max_level = zone.get("heat_max_vo", 100)
+    level = max(0, min(max_level, int(level)))
 
     for vent_id in zone["vents"]:
         key = f"{zone_name}:{vent_id}"
@@ -345,29 +345,17 @@ def _set_vent(zone_name, level):
             continue
 
         try:
-            if vtype == "servo":
-                url = f"{SERVO_SERVER}/move?angle={level}"
-                ok = False
-                for attempt in range(3):
-                    try:
-                        req = urllib.request.Request(url, data=b"", method="POST")
-                        task.executor(urllib.request.urlopen, req, None, 2)
-                        ok = True
-                        break
-                    except Exception as e2:
-                        log.warning(f"keenect: servo {url} attempt {attempt+1}: {e2}")
-                        if attempt < 2:
-                            task.sleep(1)
-                if not ok:
-                    log.error(f"keenect: servo {url} FAILED after 3 attempts")
-                    continue
-            else:  # light (Keen vents via Hubitat)
+            if vtype == "number":
+                # ESPHome servo via native HA number entity
+                number.set_value(entity_id=vent_id, value=level)
+            elif vtype == "light":
+                # Keen vents via Hubitat (light entities)
                 if level == 0:
                     light.turn_off(entity_id=vent_id)
                 else:
                     light.turn_on(entity_id=vent_id, brightness_pct=level)
             _st["vent_levels"][key] = level
-            log.info(f"keenect: {zone_name} vent {vent_id} -> {level}%")
+            log.info(f"keenect: {zone_name} vent {vent_id} -> {level}")
         except Exception as e:
             log.error(f"keenect: failed {vent_id} -> {level}: {e}")
 
@@ -663,16 +651,16 @@ def _update_status():
                         level = max(level, pct)
                 except Exception:
                     level = max(level, 0)
-            elif vtype == "servo":
-                # Servo has no feedback - use commanded value
-                key = f"{zn}:{vent_id}"
-                level = max(level, _st["vent_levels"].get(key, 0))
-            else:
-                # Generic fallback - use commanded value
-                key = f"{zn}:{vent_id}"
-                level = max(level, _st["vent_levels"].get(key, 0))
+            elif vtype == "number":
+                # ESPHome number entity - read actual state
+                try:
+                    val = _float(vent_id, 0)
+                    level = max(level, int(val))
+                except Exception:
+                    key = f"{zn}:{vent_id}"
+                    level = max(level, _st["vent_levels"].get(key, 0))
 
-        if zone.get("vent_type") == "servo":
+        if zone.get("vent_type") == "number":
             name = f"Keenect {zn.replace('_', ' ').title()} Servo"
             unit = "°"
             icon = "mdi:rotate-right"

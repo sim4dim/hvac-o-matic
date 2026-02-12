@@ -1,15 +1,21 @@
 esphome:
   name: hvac-1st-floor
   friendly_name: "HVAC 1st Floor Register"
+  on_boot:
+    priority: -100  # run after everything is initialized
+    then:
+      - number.set:
+          id: servo_angle
+          value: 0
 
 esp32:
-  board: heltec_wifi_kit_32
+  board: heltec_wifi_kit_32_V3
   framework:
-    type: arduino
+    type: esp-idf
 
 wifi:
-  ssid: "easy"
-  password: "YOUR_WIFI_PASSWORD"
+  ssid: !secret hvac_wifi_ssid
+  password: !secret hvac_wifi_password
   manual_ip:
     static_ip: 192.168.1.63
     gateway: 192.168.1.1
@@ -25,35 +31,31 @@ logger:
 
 api:
   encryption:
-    key: !secret api_key
+    key: !secret hvac_api_key
 
 ota:
   - platform: esphome
-    password: !secret ota_password
+    password: !secret hvac_ota_password
 
-# REST API - allows Hubitat (or anything) to control via HTTP
-# Native endpoint: POST /number/servo_angle/set?value=45
-# Legacy endpoint: POST /move?angle=45 (backward compatible with old firmware)
-web_server:
-  port: 80
-
-# I2C for OLED - Heltec WiFi Kit 32 pins
 i2c:
-  sda: GPIO4
-  scl: GPIO15
+  sda: GPIO17
+  scl: GPIO18
+  scan: false
+  frequency: 400kHz
 
-# OLED Display - SSD1306 128x64
 display:
   - platform: ssd1306_i2c
-    model: "SSD1306 128x64"
-    reset_pin: GPIO16
+    model: "SH1106 128x64"
     address: 0x3C
+    reset_pin: GPIO21
+    flip_x: false
+    flip_y: false
     update_interval: 5s
     lambda: |-
       it.printf(0, 0, id(font_small), "HVAC 1st Floor");
-      it.printf(0, 16, id(font_small), "IP: %s", WiFi.localIP().toString().c_str());
-      it.printf(0, 32, id(font_large), "Angle: %.0f°", id(servo_angle).state);
-      if (id(vent_servo).state == 0) {
+      it.printf(0, 16, id(font_small), "IP: %s", id(ip_address).state.c_str());
+      it.printf(0, 32, id(font_large), "Angle: %.0f", id(servo_angle).state);
+      if (id(servo_angle).state == 0) {
         it.printf(0, 52, id(font_small), "CLOSED");
       } else {
         it.printf(0, 52, id(font_small), "OPEN");
@@ -67,10 +69,10 @@ font:
     id: font_large
     size: 16
 
-# Servo output on GPIO13
+# Servo output on GPIO46
 output:
   - platform: ledc
-    pin: GPIO13
+    pin: GPIO46
     id: servo_pwm
     frequency: 50Hz
 
@@ -91,7 +93,8 @@ number:
     unit_of_measurement: "°"
     icon: "mdi:rotate-right"
     optimistic: true
-    restore_value: true
+    restore_value: false
+    initial_value: 0
     set_action:
       - servo.write:
           id: vent_servo
@@ -125,4 +128,5 @@ button:
 text_sensor:
   - platform: wifi_info
     ip_address:
+      id: ip_address
       name: "IP Address"
