@@ -6,7 +6,7 @@ Controls Keen smart vents via Hubitat integration (Zigbee radios on Hubitat).
 HVAC furnace controlled directly via HTTP to Flask server (bypasses Hubitat).
 First floor servo register controlled via ESPHome native API (number entity).
 
-Version: 1.4.0
+Version: 1.7.0
 """
 
 import datetime as dt_mod
@@ -19,7 +19,7 @@ import urllib.request
 # ---------------------------------------------------------------------------
 ZONES = {
     "ben": {
-        "thermostat": "climate.keen_ben_thermostat",
+        "thermostat": "climate.ben_s_room",
         "vents": ["light.keen_ben"],
         "vent_type": "light",
         "health_sensors": ["sensor.keen_ben_pressure"],
@@ -27,10 +27,9 @@ ZONES = {
         "cool_min_vo": 0, "cool_max_vo": 100,
         "fan_vo": 30,
         "vent_control": "Normal",
-        "exclude_recirc": False,
     },
     "gene": {
-        "thermostat": "climate.keen_gene_thermostat",
+        "thermostat": "climate.gene_s_room",
         "vents": ["light.keen_gene"],
         "vent_type": "light",
         "health_sensors": ["sensor.keen_gene_pressure"],
@@ -38,10 +37,9 @@ ZONES = {
         "cool_min_vo": 0, "cool_max_vo": 100,
         "fan_vo": 30,
         "vent_control": "Normal",
-        "exclude_recirc": False,
     },
     "mbr": {
-        "thermostat": "climate.keen_mbr_virtual_thermostat",
+        "thermostat": "climate.master_bedroom",
         "vents": ["light.keen_mbr_1", "light.keen_mbr_2"],
         "vent_type": "light",
         "health_sensors": ["sensor.keen_mbr_1_pressure", "sensor.keen_mbr_2_pressure"],
@@ -49,10 +47,9 @@ ZONES = {
         "cool_min_vo": 0, "cool_max_vo": 100,
         "fan_vo": 30,
         "vent_control": "Normal",
-        "exclude_recirc": False,
     },
     "first_floor": {
-        "thermostat": "climate.first_floor_virtual_thermostat",
+        "thermostat": "climate.first_floor",
         "vents": ["number.hvac_1st_floor_register_servo_angle"],
         "vent_type": "number",
         "health_sensors": [],
@@ -60,7 +57,6 @@ ZONES = {
         "cool_min_vo": 0, "cool_max_vo": 45,
         "fan_vo": 15,  # ~33% of 45
         "vent_control": "Normal",
-        "exclude_recirc": False,
     },
 }
 
@@ -237,6 +233,11 @@ def _circ_enabled():
     return state.get("input_boolean.enable_circulation") == "on"
 
 
+def _zone_circ_excluded(zn):
+    """Check if a zone has opted out of circulation via input_boolean."""
+    return state.get(f"input_boolean.circ_optout_{zn}") == "on"
+
+
 def _hysteresis():
     return _float("input_number.keenect_hysteresis", 0.5)
 
@@ -347,7 +348,8 @@ def _hvac_turn_off():
     _st["hvac_on"] = False
 
     # Schedule delayed vent closure (checked in periodic eval)
-    if not _st["recirc_active"]:
+    # Skip if recirculation or continuous circulation is active (vents should stay open)
+    if not _st["recirc_active"] and not _circ_enabled():
         _st["hvac_off_time"] = time_mod.time()
         _st["vents_closed_after_off"] = False
         delay = _vent_delay()
@@ -393,6 +395,33 @@ def _close_zone(zone_name):
 def _close_all_vents():
     for zn in ZONES:
         _close_zone(zn)
+
+
+def _verify_vents():
+    """Check Keen light vents actually reached their target; clear cache to retry if not."""
+    for zn, zone in ZONES.items():
+        if zone.get("vent_type") != "light":
+            continue
+        for vent_id in zone["vents"]:
+            key = f"{zn}:{vent_id}"
+            target = _st["vent_levels"].get(key)
+            if target is None:
+                continue
+            try:
+                s = state.get(vent_id)
+                if target == 0 and s == "off":
+                    continue  # correct
+                if target > 0 and s == "on":
+                    attrs = state.getattr(vent_id)
+                    bri = int(attrs.get("brightness", 0))
+                    actual_pct = round(bri * 100 / 255) if bri else 0
+                    if abs(actual_pct - target) <= 10:
+                        continue  # close enough
+                # Mismatch - clear cache so next eval retries
+                log.warning(f"keenect: vent {vent_id} target={target} actual={s}, clearing cache to retry")
+                del _st["vent_levels"][key]
+            except Exception as e:
+                log.debug(f"keenect: verify vent {vent_id}: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -454,12 +483,15 @@ def _eval_zone(zone_name):
 
     # Read from climate entity attributes (always available, no extra sensors needed)
     temp = _get_climate_attr(tstat, "current_temperature")
-    heat_sp = _get_climate_attr(tstat, "temperature")  # target temp in heat mode
-    cool_sp = _get_climate_attr(tstat, "target_temp_high")  # target in cool mode
+    heat_sp = _get_climate_attr(tstat, "temperature")  # target temp (heat or cool)
+    cool_sp = _get_climate_attr(tstat, "target_temp_high")  # cool setpoint (heat_cool mode)
     # If heat_cool mode, use target_temp_low for heat
     target_low = _get_climate_attr(tstat, "target_temp_low")
     if target_low is not None:
         heat_sp = target_low
+    # In single-setpoint cool mode, temperature IS the cool setpoint
+    if cool_sp is None and _hvac_mode() == "COOL":
+        cool_sp = heat_sp
     op_raw = _get_climate_attr(tstat, "hvac_action")
 
     if temp is None:
@@ -561,7 +593,7 @@ def _check_vent_closure_timer(now):
         _st["hvac_off_time"] = None
         _st["vents_closed_after_off"] = True
         return
-    if _st["recirc_active"]:
+    if _st["recirc_active"] or _circ_enabled():
         return
 
     elapsed = now - _st["hvac_off_time"]
@@ -599,7 +631,7 @@ def _start_recirc():
     log.info("keenect: starting recirculation")
     _st["recirc_active"] = True
     for zn, zone in ZONES.items():
-        if not zone.get("exclude_recirc"):
+        if not _zone_circ_excluded(zn):
             _set_vent(zn, zone.get("fan_vo", 30))
     _hvac_push(6)  # fanOn
 
@@ -801,9 +833,30 @@ def on_startup():
         _st["vent_levels"] = {}
         if was_on:
             log.info("keenect: startup - reset hvac_on to force re-arm")
+        # Sync hardware: send explicit off for heat/cool relays
+        # Don't use button 1 (/off) — Flask server may not handle that route
+        log.info("keenect: startup - syncing hardware state (heat/cool off)")
+        _hvac_push(3)  # heatOff
+        _hvac_push(5)  # coolOff
+        # Only turn fan off if circulation is not active
+        if not _circ_enabled():
+            _hvac_push(7)  # fanOff
+        # Clear zone states so eval treats all zones as fresh (triggers vent updates)
+        _st["zone_states"] = {}
         _update_status()
         if _enabled():
             _eval_master()
+            # If continuous circulation is active, open vents and fan
+            # (state_trigger won't fire since boolean was already on before reload)
+            if _circ_enabled():
+                log.info("keenect: startup - circulation active, opening vents + fan")
+                for zn, zone in ZONES.items():
+                    if not _zone_circ_excluded(zn):
+                        _set_vent(zn, zone.get("fan_vo", 30))
+                _hvac_push(6)  # fanOn
+            elif _all_idle():
+                log.info("keenect: startup - all idle, closing all vents")
+                _close_all_vents()
             _check_consistency()
     except Exception as e:
         log.error(f"keenect: on_startup crashed: {e}")
@@ -813,16 +866,17 @@ def on_startup():
 def periodic_eval():
     """Evaluate every 15 seconds (matches Hubitat schedule)."""
     try:
+        _verify_vents()
         _eval_master()
     except Exception as e:
         log.error(f"keenect: periodic_eval crashed: {e}")
 
 
 @state_trigger(
-    "climate.keen_ben_thermostat",
-    "climate.keen_gene_thermostat",
-    "climate.keen_mbr_virtual_thermostat",
-    "climate.first_floor_virtual_thermostat",
+    "climate.ben_s_room",
+    "climate.gene_s_room",
+    "climate.master_bedroom",
+    "climate.first_floor",
 )
 def on_climate_change(**kwargs):
     """React to any climate entity changes (state, temp, setpoint, hvac_action)."""
@@ -867,6 +921,54 @@ def on_enable_change(**kwargs):
             _save_if_changed()
     except Exception as e:
         log.error(f"keenect: on_enable_change crashed: {e}")
+
+
+@state_trigger("input_boolean.enable_circulation")
+def on_circ_change(**kwargs):
+    """React to continuous circulation toggle."""
+    try:
+        on = _circ_enabled()
+        log.info(f"keenect: continuous circulation {'ON' if on else 'OFF'}")
+        if on:
+            # Open non-excluded vents to fan position and turn fan on
+            for zn, zone in ZONES.items():
+                if not _zone_circ_excluded(zn):
+                    _set_vent(zn, zone.get("fan_vo", 30))
+            _hvac_push(6)  # fanOn
+        else:
+            # Turn fan off and close vents (unless HVAC or recirc is active)
+            if not _st["hvac_on"] and not _st["recirc_active"]:
+                _hvac_push(7)  # fanOff
+                if _all_idle():
+                    _close_all_vents()
+        _update_status()
+        _save_if_changed()
+    except Exception as e:
+        log.error(f"keenect: on_circ_change crashed: {e}")
+
+
+@state_trigger("input_boolean.circ_optout_ben", "input_boolean.circ_optout_gene",
+               "input_boolean.circ_optout_mbr", "input_boolean.circ_optout_first_floor")
+def on_circ_optout_change(**kwargs):
+    """React to per-zone circulation opt-out toggle."""
+    try:
+        if not _circ_enabled() and not _st["recirc_active"]:
+            return  # nothing to do if circulation isn't running
+        eid = kwargs.get("var_name", "")
+        # Extract zone name: input_boolean.circ_optout_ben -> ben
+        zn = eid.replace("input_boolean.circ_optout_", "")
+        if zn not in ZONES:
+            return
+        zone = ZONES[zn]
+        if _zone_circ_excluded(zn):
+            log.info(f"keenect: {zn} opted out of circulation, closing vent")
+            _set_vent(zn, 0)
+        else:
+            log.info(f"keenect: {zn} opted back into circulation, opening vent")
+            _set_vent(zn, zone.get("fan_vo", 30))
+        _update_status()
+    except Exception as e:
+        log.error(f"keenect: on_circ_optout_change crashed: {e}")
 
 
 @time_trigger("cron(*/5 * * * *)")

@@ -7,6 +7,7 @@ views:
       # Master Controls
       - type: entities
         title: HVAC Control
+        show_header_toggle: false
         entities:
           - entity: input_boolean.keenect_enabled
             name: Keenect Enabled
@@ -48,7 +49,7 @@ views:
         title: Ben's Room
         cards:
           - type: thermostat
-            entity: climate.keen_ben_thermostat
+            entity: climate.ben_s_room
           - type: entities
             entities:
               - entity: light.keen_ben
@@ -57,12 +58,14 @@ views:
                 name: Vent Level
               - entity: sensor.keen_ben_battery
                 name: Vent Battery
+              - entity: input_boolean.circ_optout_ben
+                name: Circulation Opt-out
 
       - type: vertical-stack
         title: Gene's Room
         cards:
           - type: thermostat
-            entity: climate.keen_gene_thermostat
+            entity: climate.gene_s_room
           - type: entities
             entities:
               - entity: light.keen_gene
@@ -71,12 +74,14 @@ views:
                 name: Vent Level
               - entity: sensor.keen_gene_battery
                 name: Vent Battery
+              - entity: input_boolean.circ_optout_gene
+                name: Circulation Opt-out
 
       - type: vertical-stack
         title: Master Bedroom
         cards:
           - type: thermostat
-            entity: climate.keen_mbr_virtual_thermostat
+            entity: climate.master_bedroom
           - type: entities
             entities:
               - entity: light.keen_mbr_1
@@ -89,16 +94,20 @@ views:
                 name: Vent 1 Battery
               - entity: sensor.keen_mbr_2_battery
                 name: Vent 2 Battery
+              - entity: input_boolean.circ_optout_mbr
+                name: Circulation Opt-out
 
       - type: vertical-stack
         title: First Floor
         cards:
           - type: thermostat
-            entity: climate.first_floor_virtual_thermostat
+            entity: climate.first_floor
           - type: entities
             entities:
               - entity: sensor.keenect_vent_first_floor
                 name: Vent Level
+              - entity: input_boolean.circ_optout_first_floor
+                name: Circulation Opt-out
 
   - title: History
     path: history
@@ -115,13 +124,13 @@ views:
         title: Zone Temperatures
         hours_to_show: 24
         entities:
-          - entity: sensor.keen_ben_thermostat_temperature
+          - entity: sensor.gw1000_temp_ch4
             name: Ben
-          - entity: sensor.keen_gene_thermostat_temperature
+          - entity: sensor.gw1000_temp_ch6
             name: Gene
-          - entity: sensor.keen_mbr_virtual_thermostat_temperature
+          - entity: sensor.gw1000_temp_ch7
             name: Master BR
-          - entity: sensor.first_floor_virtual_thermostat_temperature
+          - entity: sensor.gw1000_indoor_temperature
             name: 1st Floor
           - entity: sensor.outdoor_temperature
             name: Outdoor

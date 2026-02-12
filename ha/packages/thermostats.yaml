@@ -1,0 +1,302 @@
+# Virtual Thermostats - HA-native replacements for Hubitat virtual thermostats
+# Uses HACS climate_template (jcwillox/hass-template-climate)
+# Temperature from Ecowitt GW1000 sensors, setpoints in input_number helpers
+#
+# Single setpoint mode: shows heat setpoint in HEAT, cool setpoint in COOL.
+# Global input_select.hvac_mode drives which mode/setpoint is active.
+
+input_boolean:
+  circ_optout_ben:
+    name: "Ben Circulation Opt-out"
+    icon: mdi:fan-off
+
+  circ_optout_gene:
+    name: "Gene Circulation Opt-out"
+    icon: mdi:fan-off
+
+  circ_optout_mbr:
+    name: "MBR Circulation Opt-out"
+    icon: mdi:fan-off
+
+  circ_optout_first_floor:
+    name: "First Floor Circulation Opt-out"
+    icon: mdi:fan-off
+
+input_number:
+  gene_heat_setpoint:
+    name: "Gene Heat Setpoint"
+    min: 50
+    max: 90
+    step: 1
+    unit_of_measurement: "°F"
+    icon: mdi:thermometer-chevron-up
+
+  gene_cool_setpoint:
+    name: "Gene Cool Setpoint"
+    min: 50
+    max: 90
+    step: 1
+    unit_of_measurement: "°F"
+    icon: mdi:thermometer-chevron-down
+
+  ben_heat_setpoint:
+    name: "Ben Heat Setpoint"
+    min: 50
+    max: 90
+    step: 1
+    unit_of_measurement: "°F"
+    icon: mdi:thermometer-chevron-up
+
+  ben_cool_setpoint:
+    name: "Ben Cool Setpoint"
+    min: 50
+    max: 90
+    step: 1
+    unit_of_measurement: "°F"
+    icon: mdi:thermometer-chevron-down
+
+  mbr_heat_setpoint:
+    name: "MBR Heat Setpoint"
+    min: 50
+    max: 90
+    step: 1
+    unit_of_measurement: "°F"
+    icon: mdi:thermometer-chevron-up
+
+  mbr_cool_setpoint:
+    name: "MBR Cool Setpoint"
+    min: 50
+    max: 90
+    step: 1
+    unit_of_measurement: "°F"
+    icon: mdi:thermometer-chevron-down
+
+  first_floor_heat_setpoint:
+    name: "First Floor Heat Setpoint"
+    min: 50
+    max: 90
+    step: 1
+    unit_of_measurement: "°F"
+    icon: mdi:thermometer-chevron-up
+
+  first_floor_cool_setpoint:
+    name: "First Floor Cool Setpoint"
+    min: 50
+    max: 90
+    step: 1
+    unit_of_measurement: "°F"
+    icon: mdi:thermometer-chevron-down
+
+climate:
+  - platform: climate_template
+    name: "Gene's Room"
+    unique_id: gene_thermostat
+    modes:
+      - "heat"
+      - "cool"
+      - "off"
+    min_temp: 50
+    max_temp: 90
+    temp_step: 1
+
+    current_temperature_template: "{{ states('sensor.gw1000_temp_ch6') | float(0) }}"
+
+    # Single setpoint — switches between heat/cool based on global HVAC mode
+    target_temperature_template: >-
+      {% if states('input_select.hvac_mode') == 'COOL' %}
+        {{ states('input_number.gene_cool_setpoint') | float(76) }}
+      {% else %}
+        {{ states('input_number.gene_heat_setpoint') | float(62) }}
+      {% endif %}
+
+    hvac_mode_template: >-
+      {% set mode = states('input_select.hvac_mode') %}
+      {% if mode == 'HEAT' %}heat{% elif mode == 'COOL' %}cool{% else %}off{% endif %}
+
+    hvac_action_template: >-
+      {% set mode = states('input_select.hvac_mode') %}
+      {% set temp = states('sensor.gw1000_temp_ch6') | float(0) %}
+      {% set heat_sp = states('input_number.gene_heat_setpoint') | float(62) %}
+      {% set cool_sp = states('input_number.gene_cool_setpoint') | float(76) %}
+      {% if mode == 'HEAT' and temp < heat_sp %}heating
+      {% elif mode == 'COOL' and temp > cool_sp %}cooling
+      {% else %}idle{% endif %}
+
+    set_temperature:
+      - service: input_number.set_value
+        target:
+          entity_id: >-
+            {% if states('input_select.hvac_mode') == 'COOL' %}
+              input_number.gene_cool_setpoint
+            {% else %}
+              input_number.gene_heat_setpoint
+            {% endif %}
+        data:
+          value: "{{ temperature }}"
+
+    set_hvac_mode:
+      - service: input_select.select_option
+        target:
+          entity_id: input_select.hvac_mode
+        data:
+          option: >-
+            {% if hvac_mode == 'heat' %}HEAT{% elif hvac_mode == 'cool' %}COOL{% else %}OFF{% endif %}
+
+  - platform: climate_template
+    name: "Ben's Room"
+    unique_id: ben_thermostat
+    modes:
+      - "heat"
+      - "cool"
+      - "off"
+    min_temp: 50
+    max_temp: 90
+    temp_step: 1
+
+    current_temperature_template: "{{ states('sensor.gw1000_temp_ch4') | float(0) }}"
+
+    target_temperature_template: >-
+      {% if states('input_select.hvac_mode') == 'COOL' %}
+        {{ states('input_number.ben_cool_setpoint') | float(76) }}
+      {% else %}
+        {{ states('input_number.ben_heat_setpoint') | float(62) }}
+      {% endif %}
+
+    hvac_mode_template: >-
+      {% set mode = states('input_select.hvac_mode') %}
+      {% if mode == 'HEAT' %}heat{% elif mode == 'COOL' %}cool{% else %}off{% endif %}
+
+    hvac_action_template: >-
+      {% set mode = states('input_select.hvac_mode') %}
+      {% set temp = states('sensor.gw1000_temp_ch4') | float(0) %}
+      {% set heat_sp = states('input_number.ben_heat_setpoint') | float(62) %}
+      {% set cool_sp = states('input_number.ben_cool_setpoint') | float(76) %}
+      {% if mode == 'HEAT' and temp < heat_sp %}heating
+      {% elif mode == 'COOL' and temp > cool_sp %}cooling
+      {% else %}idle{% endif %}
+
+    set_temperature:
+      - service: input_number.set_value
+        target:
+          entity_id: >-
+            {% if states('input_select.hvac_mode') == 'COOL' %}
+              input_number.ben_cool_setpoint
+            {% else %}
+              input_number.ben_heat_setpoint
+            {% endif %}
+        data:
+          value: "{{ temperature }}"
+
+    set_hvac_mode:
+      - service: input_select.select_option
+        target:
+          entity_id: input_select.hvac_mode
+        data:
+          option: >-
+            {% if hvac_mode == 'heat' %}HEAT{% elif hvac_mode == 'cool' %}COOL{% else %}OFF{% endif %}
+
+  - platform: climate_template
+    name: "Master Bedroom"
+    unique_id: mbr_thermostat
+    modes:
+      - "heat"
+      - "cool"
+      - "off"
+    min_temp: 50
+    max_temp: 90
+    temp_step: 1
+
+    current_temperature_template: "{{ states('sensor.gw1000_temp_ch7') | float(0) }}"
+
+    target_temperature_template: >-
+      {% if states('input_select.hvac_mode') == 'COOL' %}
+        {{ states('input_number.mbr_cool_setpoint') | float(76) }}
+      {% else %}
+        {{ states('input_number.mbr_heat_setpoint') | float(64) }}
+      {% endif %}
+
+    hvac_mode_template: >-
+      {% set mode = states('input_select.hvac_mode') %}
+      {% if mode == 'HEAT' %}heat{% elif mode == 'COOL' %}cool{% else %}off{% endif %}
+
+    hvac_action_template: >-
+      {% set mode = states('input_select.hvac_mode') %}
+      {% set temp = states('sensor.gw1000_temp_ch7') | float(0) %}
+      {% set heat_sp = states('input_number.mbr_heat_setpoint') | float(64) %}
+      {% set cool_sp = states('input_number.mbr_cool_setpoint') | float(76) %}
+      {% if mode == 'HEAT' and temp < heat_sp %}heating
+      {% elif mode == 'COOL' and temp > cool_sp %}cooling
+      {% else %}idle{% endif %}
+
+    set_temperature:
+      - service: input_number.set_value
+        target:
+          entity_id: >-
+            {% if states('input_select.hvac_mode') == 'COOL' %}
+              input_number.mbr_cool_setpoint
+            {% else %}
+              input_number.mbr_heat_setpoint
+            {% endif %}
+        data:
+          value: "{{ temperature }}"
+
+    set_hvac_mode:
+      - service: input_select.select_option
+        target:
+          entity_id: input_select.hvac_mode
+        data:
+          option: >-
+            {% if hvac_mode == 'heat' %}HEAT{% elif hvac_mode == 'cool' %}COOL{% else %}OFF{% endif %}
+
+  - platform: climate_template
+    name: "First Floor"
+    unique_id: first_floor_thermostat
+    modes:
+      - "heat"
+      - "cool"
+      - "off"
+    min_temp: 50
+    max_temp: 90
+    temp_step: 1
+
+    current_temperature_template: "{{ states('sensor.gw1000_indoor_temperature') | float(0) }}"
+
+    target_temperature_template: >-
+      {% if states('input_select.hvac_mode') == 'COOL' %}
+        {{ states('input_number.first_floor_cool_setpoint') | float(76) }}
+      {% else %}
+        {{ states('input_number.first_floor_heat_setpoint') | float(69) }}
+      {% endif %}
+
+    hvac_mode_template: >-
+      {% set mode = states('input_select.hvac_mode') %}
+      {% if mode == 'HEAT' %}heat{% elif mode == 'COOL' %}cool{% else %}off{% endif %}
+
+    hvac_action_template: >-
+      {% set mode = states('input_select.hvac_mode') %}
+      {% set temp = states('sensor.gw1000_indoor_temperature') | float(0) %}
+      {% set heat_sp = states('input_number.first_floor_heat_setpoint') | float(69) %}
+      {% set cool_sp = states('input_number.first_floor_cool_setpoint') | float(76) %}
+      {% if mode == 'HEAT' and temp < heat_sp %}heating
+      {% elif mode == 'COOL' and temp > cool_sp %}cooling
+      {% else %}idle{% endif %}
+
+    set_temperature:
+      - service: input_number.set_value
+        target:
+          entity_id: >-
+            {% if states('input_select.hvac_mode') == 'COOL' %}
+              input_number.first_floor_cool_setpoint
+            {% else %}
+              input_number.first_floor_heat_setpoint
+            {% endif %}
+        data:
+          value: "{{ temperature }}"
+
+    set_hvac_mode:
+      - service: input_select.select_option
+        target:
+          entity_id: input_select.hvac_mode
+        data:
+          option: >-
+            {% if hvac_mode == 'heat' %}HEAT{% elif hvac_mode == 'cool' %}COOL{% else %}OFF{% endif %}
