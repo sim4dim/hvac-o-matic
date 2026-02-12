@@ -1,0 +1,59 @@
+esphome:
+  name: hvac-spare
+  friendly_name: "HVAC Spare"
+  platformio_options:
+    board_build.f_crystal: "26000000L"
+
+esp32:
+  board: esp32dev
+  variant: esp32
+  framework:
+    type: esp-idf
+    sdkconfig_options:
+      CONFIG_XTAL_FREQ_26: y
+
+wifi:
+  ssid: !secret hvac_wifi_ssid
+  password: !secret hvac_wifi_password
+  output_power: 10dB
+  power_save_mode: none
+  ap:
+    ssid: "HVAC-Spare-Fallback"
+    password: "hvacfallback"
+
+captive_portal:
+logger:
+
+api:
+  encryption:
+    key: !secret hvac_api_key
+
+ota:
+  - platform: esphome
+    password: !secret hvac_ota_password
+
+i2c:
+  sda: GPIO4
+  scl: GPIO15
+  frequency: 400kHz
+
+display:
+  - platform: ssd1306_i2c
+    model: "SSD1306 128x64"
+    address: 0x3C
+    reset_pin: GPIO16
+    update_interval: 10s
+    lambda: |-
+      it.printf(0, 0, id(font_small), "HVAC Spare");
+      it.printf(0, 16, id(font_small), "IP: %s", id(ip_address).state.c_str());
+
+font:
+  - file: "gfonts://Roboto"
+    id: font_small
+    size: 12
+
+text_sensor:
+  - platform: wifi_info
+    ip_address:
+      id: ip_address
+      name: "IP Address"
