@@ -105,6 +105,8 @@ views:
             name: Status
           - entity: sensor.keenect_anomalies
             name: Anomalies
+          - entity: sensor.keenect_zone_rates
+            name: Zone Learning
           - entity: input_select.hvac_mode
             name: HVAC Mode
             tap_action:

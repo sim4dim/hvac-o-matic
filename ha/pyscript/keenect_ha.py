@@ -610,6 +610,16 @@ def _calc_opening(zone_name, zstate, temp, setpoint):
         slope, intercept = rng, mn
 
     opening = round(delta * slope + intercept)
+
+    # Apply zone learning factor (slow zones get boosted, fast zones reduced)
+    factors = _st.get("zone_vent_factors", {}).get(zone_name, {})
+    if zstate == "HEATING":
+        factor = factors.get("heat_factor", 1.0)
+    else:
+        factor = factors.get("cool_factor", 1.0)
+    if factor != 1.0:
+        opening = round(opening * factor)
+
     return max(mn, min(mx, opening))
 
 
@@ -1108,6 +1118,17 @@ def on_startup():
             "icon": "mdi:check-circle",
             "anomalies": [],
         })
+        # Run zone learning on startup (populates vent factors)
+        try:
+            rates = _learn_zone_rates()
+            if rates:
+                factors = _compute_vent_factors(rates)
+                _st["zone_rates"] = rates
+                _st["zone_vent_factors"] = factors
+                _update_zone_rates_sensor(rates, factors)
+                log.info(f"keenect: startup zone learning - {len(rates)} zones analyzed")
+        except Exception as e:
+            log.warning(f"keenect: startup zone learning failed: {e}")
         if _enabled():
             # _eval_master will: re-evaluate zones (with persisted state for hysteresis),
             # re-send vent commands (vent_levels cleared), and turn furnace on/off as needed.
@@ -1370,6 +1391,9 @@ INFLUX_URL = "http://a0d7b954-influxdb:8086/query"
 INFLUX_DB = "homeassistant"
 ANOMALY_THRESHOLD = 1.0  # °F wrong-direction movement triggers alert
 ANOMALY_WINDOW = 30  # minutes of history to analyze
+ZONE_LEARN_DAYS = 7  # days of InfluxDB history for zone rate learning
+ZONE_RATE_BOOST_MAX = 1.4  # max vent multiplier for slow zones
+ZONE_RATE_BOOST_MIN = 0.7  # min vent multiplier for fast zones
 
 
 def _influx_temps(entity_short, minutes=30):
@@ -1388,6 +1412,116 @@ def _influx_temps(entity_short, minutes=30):
     if not series:
         return []
     return [(v[0], v[1]) for v in series[0].get("values", []) if v[1] is not None]
+
+
+def _influx_series(entity_short, days=7, interval_min=30):
+    """Query InfluxDB for multi-day temp series at given interval."""
+    query = (
+        f'SELECT mean("value") FROM "°F" '
+        f"WHERE \"entity_id\" = '{entity_short}' "
+        f"AND time > now() - {days}d "
+        f"GROUP BY time({interval_min}m) fill(previous)"
+    )
+    params = urllib.parse.urlencode({"db": INFLUX_DB, "q": query})
+    url = f"{INFLUX_URL}?{params}"
+    resp = task.executor(urllib.request.urlopen, url, None, 15)
+    data = json_mod.loads(resp.read().decode())
+    series = data.get("results", [{}])[0].get("series", [])
+    if not series:
+        return []
+    return [v[1] for v in series[0].get("values", []) if v[1] is not None]
+
+
+def _learn_zone_rates():
+    """Analyze InfluxDB history to compute zone heating/cooling rates (°F/hour)."""
+    rates = {}
+    for zone_name, zone in ZONES.items():
+        entity_short = zone["temp_sensor"].replace("sensor.", "")
+        try:
+            temps = _influx_series(entity_short, days=ZONE_LEARN_DAYS, interval_min=30)
+        except Exception as e:
+            log.warning(f"keenect: zone learning query failed for {zone_name}: {e}")
+            continue
+
+        if len(temps) < 10:
+            continue
+
+        heating_rates = []
+        cooling_rates = []
+        for i in range(1, len(temps)):
+            delta = temps[i] - temps[i - 1]
+            rate_per_hour = delta * 2  # 30-min intervals → °F/hour
+            if rate_per_hour > 0.3:
+                heating_rates.append(rate_per_hour)
+            elif rate_per_hour < -0.3:
+                cooling_rates.append(abs(rate_per_hour))
+
+        # Use median for robustness (outliers from door opens, etc.)
+        heating_rates.sort()
+        cooling_rates.sort()
+        h_med = heating_rates[len(heating_rates) // 2] if heating_rates else 0
+        c_med = cooling_rates[len(cooling_rates) // 2] if cooling_rates else 0
+
+        rates[zone_name] = {
+            "heat_rate": round(h_med, 2),
+            "cool_rate": round(c_med, 2),
+            "heat_samples": len(heating_rates),
+            "cool_samples": len(cooling_rates),
+        }
+
+    return rates
+
+
+def _compute_vent_factors(rates):
+    """Compute per-zone vent multipliers from learned rates. Slow zones get boosted."""
+    factors = {}
+    for mode_key in ("heat_rate", "cool_rate"):
+        mode_rates = {z: r[mode_key] for z, r in rates.items() if r[mode_key] > 0}
+        if not mode_rates:
+            continue
+        avg = sum(mode_rates.values()) / len(mode_rates)
+        if avg <= 0:
+            continue
+        for z, r in mode_rates.items():
+            ratio = avg / r  # >1 for slow zones, <1 for fast zones
+            factor = max(ZONE_RATE_BOOST_MIN, min(ZONE_RATE_BOOST_MAX, ratio))
+            fk = "heat_factor" if mode_key == "heat_rate" else "cool_factor"
+            factors.setdefault(z, {})[fk] = round(factor, 2)
+    return factors
+
+
+def _update_zone_rates_sensor(rates, factors):
+    """Publish zone learning data as a sensor."""
+    zone_data = {}
+    for z, r in rates.items():
+        zone_data[z] = {
+            "heat_rate": f"{r['heat_rate']}°F/h",
+            "cool_rate": f"{r['cool_rate']}°F/h",
+            "heat_factor": factors.get(z, {}).get("heat_factor", 1.0),
+            "cool_factor": factors.get(z, {}).get("cool_factor", 1.0),
+        }
+    state.set("sensor.keenect_zone_rates", "Learned", {
+        "friendly_name": "Zone Learning Rates",
+        "icon": "mdi:chart-timeline-variant",
+        "zones": zone_data,
+    })
+
+
+@time_trigger("cron(0 3 * * *)")
+def daily_zone_learning():
+    """Daily zone rate analysis from InfluxDB history."""
+    try:
+        rates = _learn_zone_rates()
+        if not rates:
+            log.warning("keenect: zone learning found no data")
+            return
+        factors = _compute_vent_factors(rates)
+        _st["zone_rates"] = rates
+        _st["zone_vent_factors"] = factors
+        _update_zone_rates_sensor(rates, factors)
+        log.info(f"keenect: zone learning complete - rates={rates} factors={factors}")
+    except Exception as e:
+        log.error(f"keenect: daily_zone_learning crashed: {e}")
 
 
 def _detect_anomalies():
