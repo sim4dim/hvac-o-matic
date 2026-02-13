@@ -105,8 +105,19 @@ views:
             name: Status
           - entity: sensor.keenect_anomalies
             name: Anomalies
-          - entity: sensor.keenect_zone_rates
-            name: Zone Learning
+          - type: custom:fold-entity-row
+            head:
+              entity: sensor.keenect_zone_rates
+              name: "Zone Learning"
+            entities:
+              - entity: sensor.keenect_rate_ben
+                name: Ben
+              - entity: sensor.keenect_rate_gene
+                name: Gene
+              - entity: sensor.keenect_rate_mbr
+                name: Master BR
+              - entity: sensor.keenect_rate_first_floor
+                name: 1st Floor
           - entity: input_select.hvac_mode
             name: HVAC Mode
             tap_action:

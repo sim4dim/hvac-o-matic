@@ -1491,15 +1491,29 @@ def _compute_vent_factors(rates):
 
 
 def _update_zone_rates_sensor(rates, factors):
-    """Publish zone learning data as a sensor."""
+    """Publish zone learning data as sensors (summary + per-zone)."""
     zone_data = {}
     for z, r in rates.items():
+        hf = factors.get(z, {}).get("heat_factor", 1.0)
+        cf = factors.get(z, {}).get("cool_factor", 1.0)
         zone_data[z] = {
             "heat_rate": f"{r['heat_rate']}°F/h",
             "cool_rate": f"{r['cool_rate']}°F/h",
-            "heat_factor": factors.get(z, {}).get("heat_factor", 1.0),
-            "cool_factor": factors.get(z, {}).get("cool_factor", 1.0),
+            "heat_factor": hf,
+            "cool_factor": cf,
         }
+        # Per-zone sensor for dashboard display
+        display = z.replace("_", " ").title()
+        summary = f"H:{r['heat_rate']}°F/h C:{r['cool_rate']}°F/h"
+        state.set(f"sensor.keenect_rate_{z}", summary, {
+            "friendly_name": f"{display} Rate",
+            "icon": "mdi:thermometer-lines",
+            "heat_rate": r["heat_rate"],
+            "cool_rate": r["cool_rate"],
+            "heat_factor": hf,
+            "cool_factor": cf,
+            "unit_of_measurement": "°F/h",
+        })
     state.set("sensor.keenect_zone_rates", "Learned", {
         "friendly_name": "Zone Learning Rates",
         "icon": "mdi:chart-timeline-variant",
