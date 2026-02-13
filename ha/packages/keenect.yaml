@@ -59,6 +59,22 @@ input_number:
     unit_of_measurement: "$/therm"
     icon: mdi:currency-usd
 
+  ac_wattage:
+    name: AC Wattage
+    min: 1000
+    max: 10000
+    step: 100
+    unit_of_measurement: "W"
+    icon: mdi:air-conditioner
+
+  electric_price_per_kwh:
+    name: Electric Price per kWh
+    min: 0.01
+    max: 1.00
+    step: 0.01
+    unit_of_measurement: "$/kWh"
+    icon: mdi:flash
+
 input_boolean:
   keenect_enabled:
     name: Keenect Enabled
@@ -84,6 +100,12 @@ utility_meter:
     cycle: daily
   hvac_heat_runtime_monthly:
     source: sensor.hvac_heat_runtime
+    cycle: monthly
+  hvac_cool_cost_daily:
+    source: sensor.hvac_cool_cost
+    cycle: daily
+  hvac_cool_cost_monthly:
+    source: sensor.hvac_cool_cost
     cycle: monthly
   hvac_cool_runtime_daily:
     source: sensor.hvac_cool_runtime

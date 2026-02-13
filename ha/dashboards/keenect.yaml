@@ -119,9 +119,17 @@ views:
               - entity: sensor.hvac_heat_cost_monthly
                 name: This Month Heating
               - entity: sensor.hvac_heat_runtime_daily
-                name: Today Runtime
+                name: Heat Runtime Today
               - entity: sensor.hvac_heat_runtime_monthly
-                name: This Month Runtime
+                name: Heat Runtime Month
+              - entity: sensor.hvac_cool_cost_daily
+                name: Today Cooling
+              - entity: sensor.hvac_cool_cost_monthly
+                name: This Month Cooling
+              - entity: sensor.hvac_cool_runtime_daily
+                name: Cool Runtime Today
+              - entity: sensor.hvac_cool_runtime_monthly
+                name: Cool Runtime Month
           - type: custom:fold-entity-row
             head:
               type: section
@@ -143,6 +151,10 @@ views:
                 name: Furnace BTU/h
               - entity: input_number.gas_price_per_therm
                 name: Gas $/therm
+              - entity: input_number.ac_wattage
+                name: AC Wattage
+              - entity: input_number.electric_price_per_kwh
+                name: Electric $/kWh
 
   - title: Activity
     path: activity

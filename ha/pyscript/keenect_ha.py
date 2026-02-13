@@ -6,12 +6,13 @@ Controls Keen smart vents via Hubitat integration (Zigbee radios on Hubitat).
 HVAC furnace controlled directly via HTTP to Flask server (bypasses Hubitat).
 First floor servo register controlled via ESPHome native API (number entity).
 
-Version: 2.2.0
+Version: 2.3.0
 """
 
 import datetime as dt_mod
 import json as json_mod
 import time as time_mod
+import re as re_mod
 import urllib.request
 
 # ---------------------------------------------------------------------------
@@ -128,7 +129,6 @@ _st = {
     "recirc_active": False,
     "last_all_idle": None,
     "debounce_until": 0.0,
-    "retry_count": 0,
     "hvac_off_time": None,      # timestamp when HVAC was turned off
     "vents_closed_after_off": True,  # whether vents were closed after last HVAC off
     "_last_persisted": None,    # snapshot of last persisted state
@@ -367,11 +367,11 @@ def _hvac_turn_on():
     _st["vents_closed_after_off"] = True
 
     if mode == "HEAT":
-        ok = _hvac_push(2)   # heatOn
+        _hvac_push(2)        # heatOn
         _hvac_push(6)        # fanOn
         _st["main_state"] = "HEATING"
     elif mode == "COOL":
-        ok = _hvac_push(4)   # coolOn
+        _hvac_push(4)        # coolOn
         _hvac_push(6)        # fanOn
         _st["main_state"] = "COOLING"
     else:
@@ -416,7 +416,11 @@ def _set_vent(zone_name, level):
     """Set vent opening for a zone (0-100)."""
     zone = ZONES[zone_name]
     vtype = zone.get("vent_type", "light")
-    max_level = zone.get("heat_max_vo", 100)
+    mode = _hvac_mode()
+    if mode == "COOL":
+        max_level = zone.get("cool_max_vo", zone.get("heat_max_vo", 100))
+    else:
+        max_level = zone.get("heat_max_vo", 100)
     level = max(0, min(max_level, int(level)))
 
     for vent_id in zone["vents"]:
@@ -654,8 +658,11 @@ def _track_cost():
         _st["heat_runtime"] += elapsed_h
         _st["heat_cost"] += cost
     elif mode == "COOL":
+        ac_kw = _float("input_number.ac_wattage", 3500) / 1000.0
+        price = _float("input_number.electric_price_per_kwh", 0.19)
+        cost = ac_kw * elapsed_h * price
         _st["cool_runtime"] += elapsed_h
-        # Cool cost placeholder - needs AC specs + electric rate
+        _st["cool_cost"] += cost
     _update_cost_sensors()
 
 
@@ -680,6 +687,12 @@ def _update_cost_sensors():
         "device_class": "duration",
         "icon": "mdi:snowflake",
         "friendly_name": "Cooling Runtime",
+    })
+    state.set("sensor.hvac_cool_cost", round(_st["cool_cost"], 2), {
+        "unit_of_measurement": "$",
+        "state_class": "total_increasing",
+        "icon": "mdi:currency-usd",
+        "friendly_name": "Cooling Cost",
     })
 
 
@@ -835,7 +848,7 @@ def _update_status():
             "hvac_on": _st["hvac_on"],
             "recirc_active": _st["recirc_active"],
             "outdoor_temp": ot,
-            "cool_lockout": (ot is not None and ot < _cool_lockout_temp()) if ot is not None else False,
+            "cool_lockout": ot is not None and ot < _cool_lockout_temp(),
         })
     except Exception as e:
         log.warning(f"keenect: status update failed: {e}")
@@ -1213,6 +1226,32 @@ def periodic_vent_health():
         _check_vent_health()
     except Exception as e:
         log.error(f"keenect: periodic_vent_health crashed: {e}")
+
+
+GAS_PRICE_URL = "https://gaschoice.apps.lara.state.mi.us/Choice/CurrentOffers?areaId=2&marketId=1"
+
+@time_trigger("cron(0 6 * * 1)")  # Every Monday at 6 AM
+def update_gas_price():
+    """Fetch DTE gas price from Michigan comparison site and update helper."""
+    try:
+        resp = task.executor(urllib.request.urlopen, GAS_PRICE_URL, None, 15)
+        html = resp.read().decode("utf-8")
+        match = re_mod.search(r'id="price-to-compare">\s*\$([0-9.]+)/CCF', html)
+        if not match:
+            log.warning("keenect: could not parse DTE gas price from comparison site")
+            return
+        price = float(match.group(1))
+        if price < 0.10 or price > 5.00:
+            log.warning(f"keenect: gas price ${price} outside valid range, skipping")
+            return
+        current = _float("input_number.gas_price_per_therm", 0)
+        if abs(current - price) < 0.001:
+            log.info(f"keenect: gas price unchanged at ${price}/CCF")
+            return
+        input_number.set_value(entity_id="input_number.gas_price_per_therm", value=price)
+        log.info(f"keenect: updated gas price ${current}→${price}/CCF from MI gas comparison")
+    except Exception as e:
+        log.error(f"keenect: failed to fetch gas price: {e}")
 
 
 @time_trigger("cron(0 * * * *)")
