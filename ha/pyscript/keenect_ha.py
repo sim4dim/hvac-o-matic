@@ -6,7 +6,7 @@ Controls Keen smart vents via Hubitat integration (Zigbee radios on Hubitat).
 HVAC furnace controlled directly via HTTP to Flask server (bypasses Hubitat).
 First floor servo register controlled via ESPHome native API (number entity).
 
-Version: 2.3.0
+Version: 2.4.0
 """
 
 import datetime as dt_mod
@@ -14,6 +14,7 @@ import json as json_mod
 import time as time_mod
 import re as re_mod
 import urllib.request
+import urllib.parse
 
 # ---------------------------------------------------------------------------
 # Zone configuration
@@ -1102,6 +1103,11 @@ def on_startup():
         _update_status()
         _update_setpoint_log_sensor()
         _update_cost_sensors()  # publish initial sensor values
+        state.set("sensor.keenect_anomalies", "OK", {
+            "friendly_name": "HVAC Anomalies",
+            "icon": "mdi:check-circle",
+            "anomalies": [],
+        })
         if _enabled():
             # _eval_master will: re-evaluate zones (with persisted state for hysteresis),
             # re-send vent commands (vent_levels cleared), and turn furnace on/off as needed.
@@ -1355,3 +1361,131 @@ def log_stats():
         )
     except Exception as e:
         log.error(f"keenect: log_stats crashed: {e}")
+
+
+# ---------------------------------------------------------------------------
+# Anomaly detection via InfluxDB
+# ---------------------------------------------------------------------------
+INFLUX_URL = "http://a0d7b954-influxdb:8086/query"
+INFLUX_DB = "homeassistant"
+ANOMALY_THRESHOLD = 1.0  # °F wrong-direction movement triggers alert
+ANOMALY_WINDOW = 30  # minutes of history to analyze
+
+
+def _influx_temps(entity_short, minutes=30):
+    """Query InfluxDB for recent zone temps. Returns list of (time, value)."""
+    query = (
+        f'SELECT mean("value") FROM "°F" '
+        f"WHERE \"entity_id\" = '{entity_short}' "
+        f"AND time > now() - {minutes}m "
+        f"GROUP BY time(5m) fill(previous)"
+    )
+    params = urllib.parse.urlencode({"db": INFLUX_DB, "q": query})
+    url = f"{INFLUX_URL}?{params}"
+    resp = task.executor(urllib.request.urlopen, url, None, 10)
+    data = json_mod.loads(resp.read().decode())
+    series = data.get("results", [{}])[0].get("series", [])
+    if not series:
+        return []
+    return [(v[0], v[1]) for v in series[0].get("values", []) if v[1] is not None]
+
+
+def _detect_anomalies():
+    """Check each zone for temperature moving wrong direction while HVAC active."""
+    if not _st.get("hvac_on"):
+        return []
+    mode = _hvac_mode()
+    if mode not in ("HEAT", "COOL"):
+        return []
+
+    anomalies = []
+    for zone_name, zone in ZONES.items():
+        sensor = zone["temp_sensor"]
+        entity_short = sensor.replace("sensor.", "")
+        current_temp = _float(sensor)
+        if current_temp is None:
+            continue
+
+        sp_key = (
+            f"input_number.{zone_name}_heat_setpoint" if mode == "HEAT"
+            else f"input_number.{zone_name}_cool_setpoint"
+        )
+        setpoint = _float(sp_key)
+        if setpoint is None:
+            continue
+
+        # Only check zones that are demanding (not yet satisfied)
+        if mode == "HEAT" and current_temp >= setpoint:
+            continue
+        if mode == "COOL" and current_temp <= setpoint:
+            continue
+
+        try:
+            temps = _influx_temps(entity_short, ANOMALY_WINDOW)
+        except Exception as e:
+            log.debug(f"keenect: influx query failed for {zone_name}: {e}")
+            continue
+        if len(temps) < 4:
+            continue
+
+        # Compare first half avg vs second half avg
+        mid = len(temps) // 2
+        first_avg = sum([t[1] for t in temps[:mid]]) / mid
+        second_avg = sum([t[1] for t in temps[mid:]]) / (len(temps) - mid)
+        trend = round(second_avg - first_avg, 1)
+
+        zone_display = zone_name.replace("_", " ").title()
+        if mode == "HEAT" and trend < -ANOMALY_THRESHOLD:
+            anomalies.append({
+                "zone": zone_display,
+                "issue": f"Temp dropping {abs(trend)}°F while heating",
+                "current": round(current_temp, 1),
+                "setpoint": int(setpoint),
+                "trend": trend,
+            })
+        elif mode == "COOL" and trend > ANOMALY_THRESHOLD:
+            anomalies.append({
+                "zone": zone_display,
+                "issue": f"Temp rising {trend}°F while cooling",
+                "current": round(current_temp, 1),
+                "setpoint": int(setpoint),
+                "trend": trend,
+            })
+
+    return anomalies
+
+
+@time_trigger("cron(*/10 * * * *)")
+def check_anomalies():
+    """Periodic anomaly detection using InfluxDB temperature trends."""
+    try:
+        anomalies = _detect_anomalies()
+        if anomalies:
+            summary = "; ".join([f"{a['zone']}: {a['issue']}" for a in anomalies])
+        else:
+            summary = "OK"
+        state.set("sensor.keenect_anomalies", summary, {
+            "friendly_name": "HVAC Anomalies",
+            "icon": "mdi:alert-circle" if anomalies else "mdi:check-circle",
+            "anomalies": anomalies,
+        })
+        if anomalies:
+            for a in anomalies:
+                log.warning(
+                    f"keenect: ANOMALY - {a['zone']}: {a['issue']} "
+                    f"(current={a['current']}°F, setpoint={a['setpoint']}°F)"
+                )
+            msg = "\n".join([
+                f"**{a['zone']}**: {a['issue']} "
+                f"(current {a['current']}°F, setpoint {a['setpoint']}°F)"
+                for a in anomalies
+            ])
+            persistent_notification.create(
+                title="HVAC Anomaly Detected",
+                message=msg,
+                notification_id="keenect_anomaly",
+            )
+        else:
+            persistent_notification.dismiss(notification_id="keenect_anomaly")
+    except Exception as e:
+        log.error(f"keenect: check_anomalies crashed: {e}")
