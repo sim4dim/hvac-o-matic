@@ -275,18 +275,52 @@ def _cool_lockout_temp():
     return _float("input_number.cool_lockout_temp", 50.0)
 
 
+_user_cache = {}
+
+
+def _build_user_cache():
+    """Build user_id -> name cache from person entities and HA auth users."""
+    # Person entities (reliable, covers real users)
+    try:
+        for eid in state.names("person"):
+            attrs = state.getattr(eid)
+            uid = attrs.get("user_id") if attrs else None
+            if uid:
+                _user_cache[uid] = attrs.get("friendly_name", eid.split(".")[-1].title())
+    except Exception as e:
+        log.debug(f"keenect: person cache failed: {e}")
+
+    # HA auth users (covers admin/system accounts without person entities)
+    try:
+        users = hass.auth.async_get_users()
+        for u in users:
+            if u.id not in _user_cache and u.name:
+                _user_cache[u.id] = u.name
+    except Exception as e:
+        log.debug(f"keenect: auth user cache skipped: {e}")
+
+    if _user_cache:
+        log.info(f"keenect: user cache built with {len(_user_cache)} entries")
+
+
 def _resolve_user(user_id):
-    """Resolve HA user_id to friendly name via person entities."""
+    """Resolve HA user_id to friendly name."""
     if not user_id:
         return "System"
+    name = _user_cache.get(user_id)
+    if name:
+        return name
+    # Lazy lookup for users added after startup
     try:
         for eid in state.names("person"):
             attrs = state.getattr(eid)
             if attrs and attrs.get("user_id") == user_id:
-                return attrs.get("friendly_name", eid.split(".")[-1].title())
+                name = attrs.get("friendly_name", eid.split(".")[-1].title())
+                _user_cache[user_id] = name
+                return name
     except Exception:
         pass
-    return user_id[:8]
+    return "Admin"
 
 
 def _update_setpoint_log_sensor():
@@ -1048,6 +1082,7 @@ def _check_vent_health():
 def on_startup():
     """Restore persisted state and re-evaluate after HA restart."""
     try:
+        _build_user_cache()
         _load_state()
         log.info(
             f"keenect: startup - hvac_on={_st['hvac_on']} "

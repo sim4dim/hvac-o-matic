@@ -166,7 +166,7 @@ views:
           {% set entries = state_attr('sensor.keenect_setpoint_log', 'entries') %}
           {% if entries %}
           {% for e in entries %}
-          **{{ e.time }}** · {{ e.zone }} {{ e.type }} · {{ e.old }}→{{ e.new }}°F · *{{ e.user }}*
+          **{{ e.time }}** · {{ e.zone }} · {{ e.type }} · {{ e.old }}→{{ e.new }}°F · *{{ e.user }}*
           {% endfor %}
           {% else %}
           *No setpoint changes recorded yet.*
