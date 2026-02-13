@@ -107,6 +107,11 @@ _SETPOINT_MAP = {
 }
 _SETPOINT_LOG_MAX = 20
 STATE_ENTITY = "input_text.keenect_persisted_state"
+SETPOINT_LOG_ENTITY = "input_text.keenect_setpoint_log_data"
+
+# Zone name <-> compact code for setpoint log persistence (255 char limit)
+_ZONE_TO_CODE = {"Ben": "b", "Gene": "g", "Mbr": "m", "First Floor": "f"}
+_CODE_TO_ZONE = {"b": "Ben", "g": "Gene", "m": "Mbr", "f": "First Floor"}
 
 # Vent health check - if pressure sensor hasn't reported in this many seconds,
 # the vent is likely offline. Pressure reports every ~5 min, so 30 min = very stale.
@@ -297,6 +302,65 @@ def _update_setpoint_log_sensor():
         "icon": "mdi:history",
         "entries": entries,
     })
+
+
+def _save_setpoint_log():
+    """Persist setpoint log to input_text (survives HA restarts).
+    Compact pipe-delimited format to fit 255 char limit (~8 entries)."""
+    entries = _st.get("setpoint_log", [])
+    parts = []
+    for e in entries:
+        zc = _ZONE_TO_CODE.get(e["zone"], e["zone"][:1].lower())
+        tc = e["type"][0].lower()
+        ov = int(e["old"]) if e["old"] == int(e["old"]) else e["old"]
+        nv = int(e["new"]) if e["new"] == int(e["new"]) else e["new"]
+        u = e.get("user", "?")[:8]
+        parts.append(f"{e['time']}|{zc}|{tc}|{ov}|{nv}|{u}")
+    val = ";".join(parts)
+    while len(val) > 255 and ";" in val:
+        val = val[:val.rfind(";")]
+    try:
+        input_text.set_value(entity_id=SETPOINT_LOG_ENTITY, value=val if val else " ")
+    except Exception as e:
+        log.warning(f"keenect: failed to save setpoint log: {e}")
+
+
+def _restore_setpoint_log():
+    """Restore setpoint log — try sensor attributes (pyscript reload), then input_text (HA restart)."""
+    # Try sensor attributes first (richer data, survives pyscript reload)
+    try:
+        prev = state.getattr("sensor.keenect_setpoint_log")
+        if prev and "entries" in prev:
+            entries = prev["entries"]
+            if entries and isinstance(entries, list) and len(entries) > 0:
+                _st["setpoint_log"] = entries[:_SETPOINT_LOG_MAX]
+                log.info(f"keenect: restored {len(_st['setpoint_log'])} setpoint log entries from sensor")
+                return
+    except Exception as e:
+        log.warning(f"keenect: sensor setpoint restore failed: {e}")
+
+    # Fallback: input_text (compact format, survives HA restart)
+    try:
+        raw = state.get(SETPOINT_LOG_ENTITY)
+        if raw in (None, "", " ", "unknown", "unavailable"):
+            return
+        entries = []
+        for part in raw.split(";"):
+            fields = part.split("|")
+            if len(fields) >= 6:
+                entries.append({
+                    "time": fields[0],
+                    "zone": _CODE_TO_ZONE.get(fields[1], fields[1].title()),
+                    "type": "Heat" if fields[2] == "h" else "Cool",
+                    "old": float(fields[3]),
+                    "new": float(fields[4]),
+                    "user": fields[5],
+                })
+        if entries:
+            _st["setpoint_log"] = entries[:_SETPOINT_LOG_MAX]
+            log.info(f"keenect: restored {len(entries)} setpoint log entries from input_text")
+    except Exception as e:
+        log.warning(f"keenect: input_text setpoint restore failed: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -999,16 +1063,7 @@ def on_startup():
         if was_on:
             log.info("keenect: startup - was_on=True, will re-arm via eval")
         log.info(f"keenect: startup - restored zone_states={_st['zone_states']}")
-        # Restore setpoint log from sensor attributes (survives pyscript reload)
-        try:
-            prev_entries = state.getattr("sensor.keenect_setpoint_log")
-            if prev_entries and "entries" in prev_entries:
-                restored = prev_entries["entries"]
-                if restored and isinstance(restored, list):
-                    _st["setpoint_log"] = restored[:_SETPOINT_LOG_MAX]
-                    log.info(f"keenect: restored {len(_st['setpoint_log'])} setpoint log entries")
-        except Exception:
-            pass
+        _restore_setpoint_log()
         _update_status()
         _update_setpoint_log_sensor()
         _update_cost_sensors()  # publish initial sensor values
@@ -1199,6 +1254,7 @@ def on_setpoint_change(**kwargs):
 
         log.info(f"keenect: setpoint change - {user} set {zone} {sp_type} {old_f}->{new_f}")
         _update_setpoint_log_sensor()
+        _save_setpoint_log()
     except Exception as e:
         log.error(f"keenect: on_setpoint_change crashed: {e}")
 
