@@ -386,8 +386,8 @@ def _restore_setpoint_log():
                     "time": fields[0],
                     "zone": _CODE_TO_ZONE.get(fields[1], fields[1].title()),
                     "type": "Heat" if fields[2] == "h" else "Cool",
-                    "old": float(fields[3]),
-                    "new": float(fields[4]),
+                    "old": int(float(fields[3])) if float(fields[3]) % 1 == 0 else float(fields[3]),
+                    "new": int(float(fields[4])) if float(fields[4]) % 1 == 0 else float(fields[4]),
                     "user": fields[5],
                 })
         if entries:
@@ -1280,8 +1280,8 @@ def on_setpoint_change(**kwargs):
             "time": now.strftime("%m/%d %I:%M %p"),
             "zone": zone.replace("_", " ").title(),
             "type": sp_type.title(),
-            "old": old_f,
-            "new": new_f,
+            "old": int(old_f) if old_f % 1 == 0 else old_f,
+            "new": int(new_f) if new_f % 1 == 0 else new_f,
             "user": user,
         }
         _st["setpoint_log"].insert(0, entry)
