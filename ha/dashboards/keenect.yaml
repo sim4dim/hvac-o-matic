@@ -4,7 +4,93 @@ views:
     path: overview
     icon: mdi:hvac
     cards:
-      # Master Controls
+      # Row 1: Master Bedroom, First Floor
+      - type: grid
+        columns: 2
+        square: false
+        cards:
+          - type: vertical-stack
+            cards:
+              - type: thermostat
+                show_current_as_primary: true
+                entity: climate.master_bedroom
+              - type: entities
+                entities:
+                  - type: custom:fold-entity-row
+                    head:
+                      entity: sensor.keenect_vent_mbr
+                      name: "MBR Details"
+                    entities:
+                      - entity: light.keen_mbr_1
+                        name: Vent 1
+                      - entity: light.keen_mbr_2
+                        name: Vent 2
+                      - entity: sensor.keen_mbr_1_battery
+                        name: Vent 1 Battery
+                      - entity: sensor.keen_mbr_2_battery
+                        name: Vent 2 Battery
+                      - entity: input_boolean.circ_optout_mbr
+                        name: Circulation Opt-out
+
+          - type: vertical-stack
+            cards:
+              - type: thermostat
+                show_current_as_primary: true
+                entity: climate.first_floor
+              - type: entities
+                entities:
+                  - type: custom:fold-entity-row
+                    head:
+                      entity: sensor.keenect_vent_first_floor
+                      name: "1st Floor Details"
+                    entities:
+                      - entity: input_boolean.circ_optout_first_floor
+                        name: Circulation Opt-out
+
+      # Row 2: Ben's Room, Gene's Room
+      - type: grid
+        columns: 2
+        square: false
+        cards:
+          - type: vertical-stack
+            cards:
+              - type: thermostat
+                show_current_as_primary: true
+                entity: climate.ben_s_room
+              - type: entities
+                entities:
+                  - type: custom:fold-entity-row
+                    head:
+                      entity: sensor.keenect_vent_ben
+                      name: "Ben Details"
+                    entities:
+                      - entity: light.keen_ben
+                        name: Vent
+                      - entity: sensor.keen_ben_battery
+                        name: Vent Battery
+                      - entity: input_boolean.circ_optout_ben
+                        name: Circulation Opt-out
+
+          - type: vertical-stack
+            cards:
+              - type: thermostat
+                show_current_as_primary: true
+                entity: climate.gene_s_room
+              - type: entities
+                entities:
+                  - type: custom:fold-entity-row
+                    head:
+                      entity: sensor.keenect_vent_gene
+                      name: "Gene Details"
+                    entities:
+                      - entity: light.keen_gene
+                        name: Vent
+                      - entity: sensor.keen_gene_battery
+                        name: Vent Battery
+                      - entity: input_boolean.circ_optout_gene
+                        name: Circulation Opt-out
+
+      # Row 3: Controls (below zones)
       - type: entities
         title: HVAC Control
         show_header_toggle: false
@@ -23,91 +109,56 @@ views:
               action: more-info
               confirmation:
                 text: "Change HVAC mode?"
-          - entity: input_number.cool_lockout_temp
-            name: Cool Lockout Temp
-          - entity: input_number.keenect_hysteresis
-            name: Hysteresis
-          - entity: input_number.vent_closure_delay
-            name: Vent Closure Delay
-          - entity: input_boolean.enable_recirculation
-            name: Smart Recirculation
-            tap_action:
-              action: toggle
-              confirmation:
-                text: "Toggle smart recirculation?"
-          - entity: input_number.recirculation_delay
-            name: Recirculation Delay
-          - entity: input_boolean.enable_circulation
-            name: Continuous Circulation
-            tap_action:
-              action: toggle
-              confirmation:
-                text: "Toggle continuous circulation?"
-
-      # Zone Cards - thermostat card shows temp, setpoint, and state
-      - type: vertical-stack
-        title: Ben's Room
-        cards:
-          - type: thermostat
-            entity: climate.ben_s_room
-          - type: entities
+          - type: custom:fold-entity-row
+            head:
+              type: section
+              label: Cost
             entities:
-              - entity: light.keen_ben
-                name: Vent
-              - entity: sensor.keenect_vent_ben
-                name: Vent Level
-              - entity: sensor.keen_ben_battery
-                name: Vent Battery
-              - entity: input_boolean.circ_optout_ben
-                name: Circulation Opt-out
-
-      - type: vertical-stack
-        title: Gene's Room
-        cards:
-          - type: thermostat
-            entity: climate.gene_s_room
-          - type: entities
+              - entity: sensor.hvac_heat_cost_daily
+                name: Today Heating
+              - entity: sensor.hvac_heat_cost_monthly
+                name: This Month Heating
+              - entity: sensor.hvac_heat_runtime_daily
+                name: Today Runtime
+              - entity: sensor.hvac_heat_runtime_monthly
+                name: This Month Runtime
+          - type: custom:fold-entity-row
+            head:
+              type: section
+              label: Settings
             entities:
-              - entity: light.keen_gene
-                name: Vent
-              - entity: sensor.keenect_vent_gene
-                name: Vent Level
-              - entity: sensor.keen_gene_battery
-                name: Vent Battery
-              - entity: input_boolean.circ_optout_gene
-                name: Circulation Opt-out
+              - entity: input_number.cool_lockout_temp
+                name: Cool Lockout Temp
+              - entity: input_number.keenect_hysteresis
+                name: Hysteresis
+              - entity: input_number.vent_closure_delay
+                name: Vent Closure Delay
+              - entity: input_boolean.enable_recirculation
+                name: Smart Recirculation
+              - entity: input_number.recirculation_delay
+                name: Recirculation Delay
+              - entity: input_boolean.enable_circulation
+                name: Continuous Circulation
+              - entity: input_number.furnace_btu_input
+                name: Furnace BTU/h
+              - entity: input_number.gas_price_per_therm
+                name: Gas $/therm
 
-      - type: vertical-stack
-        title: Master Bedroom
-        cards:
-          - type: thermostat
-            entity: climate.master_bedroom
-          - type: entities
-            entities:
-              - entity: light.keen_mbr_1
-                name: Vent 1
-              - entity: light.keen_mbr_2
-                name: Vent 2
-              - entity: sensor.keenect_vent_mbr
-                name: Vent Level
-              - entity: sensor.keen_mbr_1_battery
-                name: Vent 1 Battery
-              - entity: sensor.keen_mbr_2_battery
-                name: Vent 2 Battery
-              - entity: input_boolean.circ_optout_mbr
-                name: Circulation Opt-out
-
-      - type: vertical-stack
-        title: First Floor
-        cards:
-          - type: thermostat
-            entity: climate.first_floor
-          - type: entities
-            entities:
-              - entity: sensor.keenect_vent_first_floor
-                name: Vent Level
-              - entity: input_boolean.circ_optout_first_floor
-                name: Circulation Opt-out
+  - title: Activity
+    path: activity
+    icon: mdi:history
+    cards:
+      - type: markdown
+        title: Setpoint Changes
+        content: >-
+          {% set entries = state_attr('sensor.keenect_setpoint_log', 'entries') %}
+          {% if entries %}
+          {% for e in entries %}
+          **{{ e.time }}** · {{ e.zone }} {{ e.type }} · {{ e.old }}→{{ e.new }}°F · *{{ e.user }}*
+          {% endfor %}
+          {% else %}
+          *No setpoint changes recorded yet.*
+          {% endif %}
 
   - title: History
     path: history

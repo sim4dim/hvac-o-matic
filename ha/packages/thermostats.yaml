@@ -91,6 +91,7 @@ climate:
   - platform: climate_template
     name: "Gene's Room"
     unique_id: gene_thermostat
+    precision: 0.1
     modes:
       - "heat"
       - "cool"
@@ -118,8 +119,9 @@ climate:
       {% set temp = states('sensor.gw1000_temp_ch6') | float(0) %}
       {% set heat_sp = states('input_number.gene_heat_setpoint') | float(62) %}
       {% set cool_sp = states('input_number.gene_cool_setpoint') | float(76) %}
-      {% if mode == 'HEAT' and temp < heat_sp %}heating
-      {% elif mode == 'COOL' and temp > cool_sp %}cooling
+      {% set zs = state_attr('sensor.keenect_vent_gene', 'zone_state') | default('IDLE') %}
+      {% if mode == 'HEAT' and (temp < heat_sp or zs == 'HEATING') %}heating
+      {% elif mode == 'COOL' and (temp > cool_sp or zs == 'COOLING') %}cooling
       {% else %}idle{% endif %}
 
     set_temperature:
@@ -145,6 +147,7 @@ climate:
   - platform: climate_template
     name: "Ben's Room"
     unique_id: ben_thermostat
+    precision: 0.1
     modes:
       - "heat"
       - "cool"
@@ -171,8 +174,9 @@ climate:
       {% set temp = states('sensor.gw1000_temp_ch4') | float(0) %}
       {% set heat_sp = states('input_number.ben_heat_setpoint') | float(62) %}
       {% set cool_sp = states('input_number.ben_cool_setpoint') | float(76) %}
-      {% if mode == 'HEAT' and temp < heat_sp %}heating
-      {% elif mode == 'COOL' and temp > cool_sp %}cooling
+      {% set zs = state_attr('sensor.keenect_vent_ben', 'zone_state') | default('IDLE') %}
+      {% if mode == 'HEAT' and (temp < heat_sp or zs == 'HEATING') %}heating
+      {% elif mode == 'COOL' and (temp > cool_sp or zs == 'COOLING') %}cooling
       {% else %}idle{% endif %}
 
     set_temperature:
@@ -198,6 +202,7 @@ climate:
   - platform: climate_template
     name: "Master Bedroom"
     unique_id: mbr_thermostat
+    precision: 0.1
     modes:
       - "heat"
       - "cool"
@@ -224,8 +229,9 @@ climate:
       {% set temp = states('sensor.gw1000_temp_ch7') | float(0) %}
       {% set heat_sp = states('input_number.mbr_heat_setpoint') | float(64) %}
       {% set cool_sp = states('input_number.mbr_cool_setpoint') | float(76) %}
-      {% if mode == 'HEAT' and temp < heat_sp %}heating
-      {% elif mode == 'COOL' and temp > cool_sp %}cooling
+      {% set zs = state_attr('sensor.keenect_vent_mbr', 'zone_state') | default('IDLE') %}
+      {% if mode == 'HEAT' and (temp < heat_sp or zs == 'HEATING') %}heating
+      {% elif mode == 'COOL' and (temp > cool_sp or zs == 'COOLING') %}cooling
       {% else %}idle{% endif %}
 
     set_temperature:
@@ -251,6 +257,7 @@ climate:
   - platform: climate_template
     name: "First Floor"
     unique_id: first_floor_thermostat
+    precision: 0.1
     modes:
       - "heat"
       - "cool"
@@ -277,8 +284,9 @@ climate:
       {% set temp = states('sensor.gw1000_indoor_temperature') | float(0) %}
       {% set heat_sp = states('input_number.first_floor_heat_setpoint') | float(69) %}
       {% set cool_sp = states('input_number.first_floor_cool_setpoint') | float(76) %}
-      {% if mode == 'HEAT' and temp < heat_sp %}heating
-      {% elif mode == 'COOL' and temp > cool_sp %}cooling
+      {% set zs = state_attr('sensor.keenect_vent_first_floor', 'zone_state') | default('IDLE') %}
+      {% if mode == 'HEAT' and (temp < heat_sp or zs == 'HEATING') %}heating
+      {% elif mode == 'COOL' and (temp > cool_sp or zs == 'COOLING') %}cooling
       {% else %}idle{% endif %}
 
     set_temperature:

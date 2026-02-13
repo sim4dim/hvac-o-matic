@@ -6,7 +6,7 @@ Controls Keen smart vents via Hubitat integration (Zigbee radios on Hubitat).
 HVAC furnace controlled directly via HTTP to Flask server (bypasses Hubitat).
 First floor servo register controlled via ESPHome native API (number entity).
 
-Version: 1.7.0
+Version: 2.2.0
 """
 
 import datetime as dt_mod
@@ -20,43 +20,47 @@ import urllib.request
 ZONES = {
     "ben": {
         "thermostat": "climate.ben_s_room",
+        "temp_sensor": "sensor.gw1000_temp_ch4",
         "vents": ["light.keen_ben"],
         "vent_type": "light",
         "health_sensors": ["sensor.keen_ben_pressure"],
-        "heat_min_vo": 0, "heat_max_vo": 100,
-        "cool_min_vo": 0, "cool_max_vo": 100,
+        "heat_min_vo": 15, "heat_max_vo": 100,
+        "cool_min_vo": 15, "cool_max_vo": 100,
         "fan_vo": 30,
-        "vent_control": "Normal",
+        "vent_control": "Aggressive",
     },
     "gene": {
         "thermostat": "climate.gene_s_room",
+        "temp_sensor": "sensor.gw1000_temp_ch6",
         "vents": ["light.keen_gene"],
         "vent_type": "light",
         "health_sensors": ["sensor.keen_gene_pressure"],
-        "heat_min_vo": 0, "heat_max_vo": 100,
-        "cool_min_vo": 0, "cool_max_vo": 100,
+        "heat_min_vo": 15, "heat_max_vo": 100,
+        "cool_min_vo": 15, "cool_max_vo": 100,
         "fan_vo": 30,
-        "vent_control": "Normal",
+        "vent_control": "Aggressive",
     },
     "mbr": {
         "thermostat": "climate.master_bedroom",
+        "temp_sensor": "sensor.gw1000_temp_ch7",
         "vents": ["light.keen_mbr_1", "light.keen_mbr_2"],
         "vent_type": "light",
         "health_sensors": ["sensor.keen_mbr_1_pressure", "sensor.keen_mbr_2_pressure"],
-        "heat_min_vo": 0, "heat_max_vo": 100,
-        "cool_min_vo": 0, "cool_max_vo": 100,
+        "heat_min_vo": 15, "heat_max_vo": 100,
+        "cool_min_vo": 15, "cool_max_vo": 100,
         "fan_vo": 30,
-        "vent_control": "Normal",
+        "vent_control": "Aggressive",
     },
     "first_floor": {
         "thermostat": "climate.first_floor",
+        "temp_sensor": "sensor.gw1000_indoor_temperature",
         "vents": ["number.hvac_1st_floor_register_servo_angle"],
         "vent_type": "number",
         "health_sensors": [],
-        "heat_min_vo": 0, "heat_max_vo": 45,  # servo max angle is 45 degrees
-        "cool_min_vo": 0, "cool_max_vo": 45,
+        "heat_min_vo": 7, "heat_max_vo": 45,  # servo: 7°≈15% of 45° max
+        "cool_min_vo": 7, "cool_max_vo": 45,
         "fan_vo": 15,  # ~33% of 45
-        "vent_control": "Normal",
+        "vent_control": "Aggressive",
     },
 }
 
@@ -88,6 +92,19 @@ HVAC_MQTT_MAP = {
 }
 
 OUTDOOR_TEMP_ENTITY = "sensor.outdoor_temperature"
+
+# Setpoint change tracking — maps input_number to (zone, heat/cool)
+_SETPOINT_MAP = {
+    "input_number.ben_heat_setpoint": ("ben", "heat"),
+    "input_number.ben_cool_setpoint": ("ben", "cool"),
+    "input_number.gene_heat_setpoint": ("gene", "heat"),
+    "input_number.gene_cool_setpoint": ("gene", "cool"),
+    "input_number.mbr_heat_setpoint": ("mbr", "heat"),
+    "input_number.mbr_cool_setpoint": ("mbr", "cool"),
+    "input_number.first_floor_heat_setpoint": ("first_floor", "heat"),
+    "input_number.first_floor_cool_setpoint": ("first_floor", "cool"),
+}
+_SETPOINT_LOG_MAX = 20
 STATE_ENTITY = "input_text.keenect_persisted_state"
 
 # Vent health check - if pressure sensor hasn't reported in this many seconds,
@@ -115,6 +132,13 @@ _st = {
     "hvac_off_time": None,      # timestamp when HVAC was turned off
     "vents_closed_after_off": True,  # whether vents were closed after last HVAC off
     "_last_persisted": None,    # snapshot of last persisted state
+    "setpoint_log": [],         # recent setpoint changes for activity panel
+    # Cost tracking (monotonically increasing, reset by HA utility_meter)
+    "last_cost_time": None,     # timestamp of last cost accumulation
+    "heat_runtime": 0.0,        # cumulative heating hours
+    "heat_cost": 0.0,           # cumulative heating cost ($)
+    "cool_runtime": 0.0,        # cumulative cooling hours
+    "cool_cost": 0.0,           # cumulative cooling cost ($)
 }
 
 
@@ -246,6 +270,35 @@ def _cool_lockout_temp():
     return _float("input_number.cool_lockout_temp", 50.0)
 
 
+def _resolve_user(user_id):
+    """Resolve HA user_id to friendly name via person entities."""
+    if not user_id:
+        return "System"
+    try:
+        for eid in state.names("person"):
+            attrs = state.getattr(eid)
+            if attrs and attrs.get("user_id") == user_id:
+                return attrs.get("friendly_name", eid.split(".")[-1].title())
+    except Exception:
+        pass
+    return user_id[:8]
+
+
+def _update_setpoint_log_sensor():
+    """Publish setpoint change log as a sensor entity."""
+    entries = _st.get("setpoint_log", [])
+    last = entries[0] if entries else None
+    summary = (
+        f"{last['user']}: {last['zone']} {last['type']} → {last['new']}°F"
+        if last else "No changes"
+    )
+    state.set("sensor.keenect_setpoint_log", summary, {
+        "friendly_name": "Setpoint Changes",
+        "icon": "mdi:history",
+        "entries": entries,
+    })
+
+
 # ---------------------------------------------------------------------------
 # HVAC furnace control
 # ---------------------------------------------------------------------------
@@ -369,7 +422,7 @@ def _set_vent(zone_name, level):
     for vent_id in zone["vents"]:
         key = f"{zone_name}:{vent_id}"
         current = _st["vent_levels"].get(key, -99)
-        if abs(current - level) <= 4:
+        if level > 0 and abs(current - level) <= 4:
             continue
 
         try:
@@ -478,68 +531,156 @@ def _get_climate_attr(entity_id, attr, default=None):
 
 
 def _eval_zone(zone_name):
+    """Compute new zone state. Returns dict with result, or None if temp unavailable.
+    Pure computation — no vent side effects."""
     zone = ZONES[zone_name]
     tstat = zone["thermostat"]
 
-    # Read from climate entity attributes (always available, no extra sensors needed)
-    temp = _get_climate_attr(tstat, "current_temperature")
-    heat_sp = _get_climate_attr(tstat, "temperature")  # target temp (heat or cool)
+    # Read raw sensor for precise temp (avoids climate_template temp_step rounding)
+    temp = _float(zone["temp_sensor"])
+    # Setpoints from climate entity attributes
+    heat_sp = _get_climate_attr(tstat, "temperature")  # target temp (single-setpoint)
     cool_sp = _get_climate_attr(tstat, "target_temp_high")  # cool setpoint (heat_cool mode)
-    # If heat_cool mode, use target_temp_low for heat
     target_low = _get_climate_attr(tstat, "target_temp_low")
     if target_low is not None:
         heat_sp = target_low
-    # In single-setpoint cool mode, temperature IS the cool setpoint
     if cool_sp is None and _hvac_mode() == "COOL":
         cool_sp = heat_sp
-    op_raw = _get_climate_attr(tstat, "hvac_action")
 
     if temp is None:
-        return
+        return None
 
-    # Keenect offsets: heat_sp + 1, cool_sp - 1
-    zheat = (float(heat_sp) + 1) if heat_sp is not None else None
-    zcool = (float(cool_sp) - 1) if cool_sp is not None else None
+    heat_sp = float(heat_sp) if heat_sp is not None else None
+    cool_sp = float(cool_sp) if cool_sp is not None else None
 
-    op = (str(op_raw) if op_raw else "idle").upper()
-    if op not in ("HEATING", "COOLING", "FAN ONLY", "IDLE"):
-        op = "IDLE"
+    # Thermostat's hvac_action is the stateless start signal (temp < setpoint).
+    # Pyscript adds hysteresis for the stop direction only (keep going past setpoint).
+    op_raw = _get_climate_attr(tstat, "hvac_action")
+    tstat_action = (str(op_raw) if op_raw else "idle").upper()
 
     old = _st["zone_states"].get(zone_name, "IDLE")
-
-    # Hysteresis override
+    mode = _hvac_mode()
     hyst = _hysteresis()
-    if op == "HEATING" and zheat is not None and temp >= zheat + hyst:
-        op = "IDLE"
-    if op == "COOLING" and zcool is not None and temp <= zcool - hyst:
-        op = "IDLE"
 
-    _st["zone_states"][zone_name] = op
+    # Hybrid hysteresis:
+    #   START heating: thermostat says "heating" (temp < setpoint) — stateless, survives reload
+    #   STOP heating:  pyscript keeps heating until temp >= setpoint + hysteresis
+    #   START cooling: thermostat says "cooling" (temp > setpoint) — stateless
+    #   STOP cooling:  pyscript keeps cooling until temp <= setpoint - hysteresis
+    op = "IDLE"
+    if mode == "HEAT" and heat_sp is not None:
+        if old == "HEATING":
+            op = "IDLE" if temp >= heat_sp + hyst else "HEATING"
+        elif tstat_action == "HEATING":
+            op = "HEATING"
+    elif mode == "COOL" and cool_sp is not None:
+        if old == "COOLING":
+            op = "IDLE" if temp <= cool_sp - hyst else "COOLING"
+        elif tstat_action == "COOLING":
+            op = "COOLING"
 
-    if op in ("HEATING", "COOLING", "FAN ONLY"):
-        sp = zheat if op == "HEATING" else zcool
-        if sp is None:
-            sp = temp
-        opening = _calc_opening(zone_name, op, temp, sp)
-        _set_vent(zone_name, opening)
-    elif op == "IDLE" and old != "IDLE":
-        # Zone just went idle
-        others_active = any([
-            s not in ("IDLE", "OFF", "")
-            for n, s in _st["zone_states"].items() if n != zone_name
-        ])
-        if others_active:
-            log.info(f"keenect: {zone_name} idle, others active -> close vents")
-            _close_zone(zone_name)
-        else:
-            log.info(f"keenect: {zone_name} idle (last zone), delayed closure")
+    return {"op": op, "old": old, "temp": temp, "heat_sp": heat_sp, "cool_sp": cool_sp, "hyst": hyst}
 
-    if op != old:
-        log.info(f"keenect: {zone_name} {old}->{op} temp={temp} hsp={zheat} csp={zcool}")
+
+def _apply_zone_vents(results):
+    """Apply vent actions using complete zone state picture (order-independent).
+    Called after all zones have been evaluated."""
+    for zone_name, r in results.items():
+        op = r["op"]
+        old = r["old"]
+        temp = r["temp"]
+        hyst = r["hyst"]
+
+        # Update stored state
+        _st["zone_states"][zone_name] = op
+
+        if op in ("HEATING", "COOLING", "FAN ONLY"):
+            # Use effective stop point as target so vent stays open through overshoot region
+            if op == "HEATING":
+                target = r["heat_sp"] + hyst
+            elif op == "COOLING":
+                target = r["cool_sp"] - hyst
+            else:
+                target = r["heat_sp"]
+            opening = _calc_opening(zone_name, op, temp, target)
+            _set_vent(zone_name, opening)
+        elif op == "IDLE" and old != "IDLE":
+            # Zone just went idle — check others using the COMPLETE new state picture
+            others_active = any([
+                results[n]["op"] not in ("IDLE", "OFF", "")
+                for n in results if n != zone_name
+            ])
+            if others_active:
+                log.info(f"keenect: {zone_name} idle, others active -> close vents")
+                _close_zone(zone_name)
+            else:
+                log.info(f"keenect: {zone_name} idle (last zone), delayed closure")
+
+        if op != old:
+            log.info(
+                f"keenect: {zone_name} {old}->{op} temp={temp} "
+                f"hsp={r['heat_sp']} csp={r['cool_sp']} hyst={hyst}"
+            )
 
 
 def _all_idle():
     return all([s in ("IDLE", "OFF", "") for s in _st["zone_states"].values()])
+
+
+# ---------------------------------------------------------------------------
+# Cost tracking — Lennox G61MPV two-stage furnace
+# ---------------------------------------------------------------------------
+# Input BTU/h: high=88000, low=60000. Default to low fire (most common).
+# Cost = input_BTU/h × hours / 100,000 BTU/therm × $/therm
+FURNACE_BTU_DEFAULT = 60000  # low fire input
+
+def _track_cost():
+    """Accumulate runtime and cost each eval cycle when HVAC is active."""
+    now = time_mod.time()
+    last = _st.get("last_cost_time")
+    _st["last_cost_time"] = now
+    if last is None:
+        return  # first call after startup, no elapsed time to accumulate
+    elapsed_h = (now - last) / 3600.0
+    if elapsed_h <= 0 or elapsed_h > 0.1:  # sanity: skip if >6 min gap (restart)
+        return
+    if not _st["hvac_on"]:
+        return
+    mode = _hvac_mode()
+    if mode == "HEAT":
+        btu = _float("input_number.furnace_btu_input", FURNACE_BTU_DEFAULT)
+        price = _float("input_number.gas_price_per_therm", 1.00)
+        cost = (btu * elapsed_h / 100000.0) * price
+        _st["heat_runtime"] += elapsed_h
+        _st["heat_cost"] += cost
+    elif mode == "COOL":
+        _st["cool_runtime"] += elapsed_h
+        # Cool cost placeholder - needs AC specs + electric rate
+    _update_cost_sensors()
+
+
+def _update_cost_sensors():
+    """Publish cost/runtime as HA sensors with total_increasing for utility_meter."""
+    state.set("sensor.hvac_heat_runtime", round(_st["heat_runtime"], 4), {
+        "unit_of_measurement": "h",
+        "state_class": "total_increasing",
+        "device_class": "duration",
+        "icon": "mdi:fire",
+        "friendly_name": "Heating Runtime",
+    })
+    state.set("sensor.hvac_heat_cost", round(_st["heat_cost"], 2), {
+        "unit_of_measurement": "$",
+        "state_class": "total_increasing",
+        "icon": "mdi:currency-usd",
+        "friendly_name": "Heating Cost",
+    })
+    state.set("sensor.hvac_cool_runtime", round(_st["cool_runtime"], 4), {
+        "unit_of_measurement": "h",
+        "state_class": "total_increasing",
+        "device_class": "duration",
+        "icon": "mdi:snowflake",
+        "friendly_name": "Cooling Runtime",
+    })
 
 
 # ---------------------------------------------------------------------------
@@ -555,10 +696,17 @@ def _eval_master():
         return
     _st["debounce_until"] = now + 2
 
+    # Pass 1: compute new zone states (no vent side effects)
+    results = {}
     for zn in ZONES:
-        _eval_zone(zn)
+        r = _eval_zone(zn)
+        if r is not None:
+            results[zn] = r
 
-    demanding = sum([1 for s in _st["zone_states"].values() if s in ("HEATING", "COOLING")])
+    # Pass 2: apply vent actions with complete picture (order-independent)
+    _apply_zone_vents(results)
+
+    demanding = sum([1 for r in results.values() if r["op"] in ("HEATING", "COOLING")])
     mode = _hvac_mode()
 
     if demanding > 0:
@@ -578,6 +726,7 @@ def _eval_master():
     # Check delayed vent closure timer
     _check_vent_closure_timer(now)
 
+    _track_cost()
     _update_status()
     _save_if_changed()
 
@@ -827,25 +976,48 @@ def on_startup():
             f"keenect: startup - hvac_on={_st['hvac_on']} "
             f"main={_st['main_state']} recirc={_st['recirc_active']}"
         )
-        # After reload, hardware state is unknown — reset so eval re-sends all commands
+        # After reload, hardware state is unknown — reset so eval re-sends vent commands.
+        # Keep zone_states from persisted state! Clearing them breaks stateful hysteresis:
+        # zones in the deadband (at setpoint) would all evaluate as IDLE and close vents
+        # even while the furnace is still running.
         was_on = _st["hvac_on"]
         _st["hvac_on"] = False
-        _st["vent_levels"] = {}
+        _st["vent_levels"] = {}  # force vent re-sends
         if was_on:
-            log.info("keenect: startup - reset hvac_on to force re-arm")
-        # Sync hardware: send explicit off for heat/cool relays
-        # Don't use button 1 (/off) — Flask server may not handle that route
-        log.info("keenect: startup - syncing hardware state (heat/cool off)")
-        _hvac_push(3)  # heatOff
-        _hvac_push(5)  # coolOff
-        # Only turn fan off if circulation is not active
-        if not _circ_enabled():
-            _hvac_push(7)  # fanOff
-        # Clear zone states so eval treats all zones as fresh (triggers vent updates)
-        _st["zone_states"] = {}
+            log.info("keenect: startup - was_on=True, will re-arm via eval")
+        log.info(f"keenect: startup - restored zone_states={_st['zone_states']}")
+        # Restore setpoint log from sensor attributes (survives pyscript reload)
+        try:
+            prev_entries = state.getattr("sensor.keenect_setpoint_log")
+            if prev_entries and "entries" in prev_entries:
+                restored = prev_entries["entries"]
+                if restored and isinstance(restored, list):
+                    _st["setpoint_log"] = restored[:_SETPOINT_LOG_MAX]
+                    log.info(f"keenect: restored {len(_st['setpoint_log'])} setpoint log entries")
+        except Exception:
+            pass
         _update_status()
+        _update_setpoint_log_sensor()
+        _update_cost_sensors()  # publish initial sensor values
         if _enabled():
+            # _eval_master will: re-evaluate zones (with persisted state for hysteresis),
+            # re-send vent commands (vent_levels cleared), and turn furnace on/off as needed.
             _eval_master()
+            # Hardware safety sync: after eval, if furnace should be off, ensure it IS off.
+            # Without this, a reload during an active heating cycle leaves the furnace
+            # running with hvac_on=False, and no code path ever sends the off command.
+            if not _st["hvac_on"] and not _st["recirc_active"]:
+                log.info("keenect: startup - hardware sync: ensuring furnace off")
+                _hvac_push(3)  # heatOff
+                _hvac_push(5)  # coolOff
+                if not _circ_enabled():
+                    _hvac_push(7)  # fanOff
+                    # Also close all vents — if zones are IDLE→IDLE after restart,
+                    # _apply_zone_vents won't fire any vent commands, leaving vents
+                    # at whatever physical position they were in before restart.
+                    if _all_idle():
+                        log.info("keenect: startup - all idle, closing all vents")
+                        _close_all_vents()
             # If continuous circulation is active, open vents and fan
             # (state_trigger won't fire since boolean was already on before reload)
             if _circ_enabled():
@@ -854,9 +1026,6 @@ def on_startup():
                     if not _zone_circ_excluded(zn):
                         _set_vent(zn, zone.get("fan_vo", 30))
                 _hvac_push(6)  # fanOn
-            elif _all_idle():
-                log.info("keenect: startup - all idle, closing all vents")
-                _close_all_vents()
             _check_consistency()
     except Exception as e:
         log.error(f"keenect: on_startup crashed: {e}")
@@ -877,9 +1046,13 @@ def periodic_eval():
     "climate.gene_s_room",
     "climate.master_bedroom",
     "climate.first_floor",
+    "sensor.gw1000_temp_ch4",
+    "sensor.gw1000_temp_ch6",
+    "sensor.gw1000_temp_ch7",
+    "sensor.gw1000_indoor_temperature",
 )
 def on_climate_change(**kwargs):
-    """React to any climate entity changes (state, temp, setpoint, hvac_action)."""
+    """React to climate or raw temp sensor changes."""
     try:
         log.info(f"keenect: climate change {kwargs.get('var_name')}")
         _eval_master()
@@ -969,6 +1142,52 @@ def on_circ_optout_change(**kwargs):
         _update_status()
     except Exception as e:
         log.error(f"keenect: on_circ_optout_change crashed: {e}")
+
+
+@state_trigger(
+    "input_number.ben_heat_setpoint", "input_number.ben_cool_setpoint",
+    "input_number.gene_heat_setpoint", "input_number.gene_cool_setpoint",
+    "input_number.mbr_heat_setpoint", "input_number.mbr_cool_setpoint",
+    "input_number.first_floor_heat_setpoint", "input_number.first_floor_cool_setpoint",
+)
+def on_setpoint_change(**kwargs):
+    """Track who changed a thermostat setpoint."""
+    try:
+        eid = kwargs.get("var_name", "")
+        mapping = _SETPOINT_MAP.get(eid)
+        if not mapping:
+            return
+        zone, sp_type = mapping
+        old_val = kwargs.get("old_value")
+        new_val = kwargs.get("value")
+        # Skip non-numeric transitions (e.g., "unknown" -> "69.0" on startup)
+        try:
+            old_f = float(old_val)
+            new_f = float(new_val)
+        except (TypeError, ValueError):
+            return
+        if old_f == new_f:
+            return
+        context = kwargs.get("context")
+        user_id = context.user_id if context else None
+        user = _resolve_user(user_id)
+
+        now = dt_mod.datetime.now()
+        entry = {
+            "time": now.strftime("%m/%d %I:%M %p"),
+            "zone": zone.replace("_", " ").title(),
+            "type": sp_type.title(),
+            "old": old_f,
+            "new": new_f,
+            "user": user,
+        }
+        _st["setpoint_log"].insert(0, entry)
+        _st["setpoint_log"] = _st["setpoint_log"][:_SETPOINT_LOG_MAX]
+
+        log.info(f"keenect: setpoint change - {user} set {zone} {sp_type} {old_f}->{new_f}")
+        _update_setpoint_log_sensor()
+    except Exception as e:
+        log.error(f"keenect: on_setpoint_change crashed: {e}")
 
 
 @time_trigger("cron(*/5 * * * *)")

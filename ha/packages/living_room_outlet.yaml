@@ -1,0 +1,45 @@
+# NOTE: This automation is managed via HA UI (stored in automations.yaml).
+# This file is kept as reference only - do not deploy as a package.
+automation:
+  - alias: "Living Room Outlet - Sunset/TV"
+    id: living_room_outlet_sunset_tv
+    trigger:
+      - platform: sun
+        event: sunset
+        id: sunset
+      - platform: sun
+        event: sunrise
+        id: sunrise
+      - platform: state
+        entity_id: media_player.sony_xbr_65x950g
+        id: tv_changed
+    action:
+      - choose:
+          # Sunrise → off
+          - conditions:
+              - condition: trigger
+                id: sunrise
+            sequence:
+              - service: light.turn_off
+                target:
+                  entity_id: light.living_room_outlet
+          # Sunset or TV turned off → on (if dark AND TV off)
+          - conditions:
+              - condition: sun
+                after: sunset
+                before: sunrise
+              - condition: state
+                entity_id: media_player.sony_xbr_65x950g
+                state: "off"
+            sequence:
+              - service: light.turn_on
+                target:
+                  entity_id: light.living_room_outlet
+        # Default (TV on while dark) → off
+        default:
+          - condition: sun
+            after: sunset
+            before: sunrise
+          - service: light.turn_off
+            target:
+              entity_id: light.living_room_outlet

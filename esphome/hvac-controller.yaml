@@ -2,11 +2,107 @@ esphome:
   name: hvac-controller
   friendly_name: "HVAC Controller"
 
+# ===========================================================================
+# WIRING DIAGRAM
+# ===========================================================================
+#
+# Board: ESP32-S3-WROOM-1-N16R8 (AYWHP) + Kootek 8-Channel 5V Relay Module
+# Sensors: BME280 (supply duct), BME680 (return duct), SSD1306 OLED
+#
+# ESP32-S3 N16R8: 16MB flash, 8MB PSRAM (octal)
+# Avoid GPIOs: 0, 3, 26-32 (PSRAM/flash), 45, 46 (strapping), 19-20 (USB)
+#
+# IMPORTANT: Add 10K pull-up resistors from each relay GPIO to 3.3V!
+# Without pull-ups, GPIOs float LOW during boot and relays fire briefly.
+# This could cause spurious furnace activation on every reboot.
+#
+#   3.3V ──┬──┬──┬──┬──┬──┬──┬──
+#          R  R  R  R  R  R  R  R    (10K each)
+#          │  │  │  │  │  │  │  │
+#          4  5  6  7 15 16 17 18    (GPIO -> relay board IN1-IN8)
+#
+# Relays are active-low. Pull-ups keep them OFF during boot.
+# On boot, all relays de-energized -> changeover on NC -> Pearl in control.
+#
+# ---------------------------------------------------------------------------
+# RELAY ASSIGNMENTS
+# ---------------------------------------------------------------------------
+#
+#  Relay  GPIO  Function          Notes
+#  ─────  ────  ────────────────  ─────────────────────────────────
+#  1       4    Heat control      Switches R -> W (ESP32 mode only)
+#  2       5    Cool control      Switches R -> Y (ESP32 mode only)
+#  3       6    Fan control       Switches R -> G (ESP32 mode only)
+#  4       7    UV light          On when any airflow active
+#  5      15    W changeover      NC=Pearl W, NO=Relay 1 output
+#  6      16    Y changeover      NC=Pearl Y, NO=Relay 2 output
+#  7      17    G changeover      NC=Pearl G, NO=Relay 3 output
+#  8      18    Spare
+#
+# ---------------------------------------------------------------------------
+# 24VAC THERMOSTAT WIRING
+# ---------------------------------------------------------------------------
+#
+#  FURNACE                  RELAY BOARD                   PEARL THERMOSTAT
+#  ───────                  ───────────                   ────────────────
+#
+#  R (24V hot) ─────┬───────────────────────────────────── R
+#                   │
+#                   ├── Relay 1 COM ── NO ──→ Relay 5 NO
+#                   ├── Relay 2 COM ── NO ──→ Relay 6 NO
+#                   └── Relay 3 COM ── NO ──→ Relay 7 NO
+#
+#  W (heat) ──────────── Relay 5 COM
+#                            NC ←─────────────────────────── W
+#                            NO ←── Relay 1 output
+#
+#  Y (cool) ──────────── Relay 6 COM
+#                            NC ←─────────────────────────── Y
+#                            NO ←── Relay 2 output
+#
+#  G (fan) ───────────── Relay 7 COM
+#                            NC ←─────────────────────────── G
+#                            NO ←── Relay 3 output
+#
+#  C (common) ──────────────────────────────────────────── C
+#
+# ---------------------------------------------------------------------------
+# OPERATING MODES
+# ---------------------------------------------------------------------------
+#
+#  NORMAL (changeover relays 5,6,7 energized -> NO position):
+#    ESP32 relays 1,2,3 control furnace W,Y,G via changeover NO
+#    Pearl is disconnected from furnace (but still powered via R,C)
+#
+#  BYPASS (changeover relays 5,6,7 de-energized -> NC position):
+#    Pearl thermostat controls furnace directly via changeover NC
+#    ESP32 control relays 1,2,3 don't matter (disconnected)
+#    Triggered by: button press, HA command, or 60-min watchdog
+#
+#  FAIL-SAFE (ESP32 dead / no power):
+#    All relays de-energize -> NC -> Pearl controls furnace
+#    No code needed. Hardware fail-safe by design.
+#
+# ---------------------------------------------------------------------------
+# OTHER CONNECTIONS
+# ---------------------------------------------------------------------------
+#
+#  GPIO11 - Bypass button (INPUT_PULLUP, press to toggle bypass)
+#  GPIO10 - Warning LED (on during bypass)
+#  GPIO8  - I2C SDA (BME280, BME680, SSD1306)
+#  GPIO9  - I2C SCL
+#
+# ===========================================================================
+
 esp32:
-  board: esp32dev
-  variant: esp32
+  board: esp32-s3-devkitc-1
+  variant: esp32s3
   framework:
     type: esp-idf
+
+psram:
+  mode: octal
+  speed: 80MHz
 
 wifi:
   ssid: !secret hvac_wifi_ssid
@@ -30,6 +126,8 @@ api:
     - globals.set:
         id: watchdog_tripped
         value: "false"
+    # HA connected - exit bypass, ESP32 takes control
+    - switch.turn_off: bypass_sw
   on_client_disconnected:
     - logger.log: "API client disconnected - watchdog timer active"
 
@@ -83,17 +181,20 @@ interval:
 # I2C bus - shared by BME280, BME680, SSD1306
 # ---------------------------------------------------------------------------
 i2c:
-  sda: GPIO21
-  scl: GPIO22
+  sda: GPIO8
+  scl: GPIO9
   frequency: 400kHz
 
 # ---------------------------------------------------------------------------
 # Relay switches with safety interlocks
 # ---------------------------------------------------------------------------
+# All relay GPIOs are active-low and MUST have external 10K pull-ups to 3.3V
 switch:
+  # --- Control relays (1-4) - only active in ESP32 mode ---
+
   # HEAT and COOL are interlocked - cannot be on simultaneously
   - platform: gpio
-    pin: GPIO13
+    pin: GPIO4     # Relay 1
     name: "Heat"
     id: heat_sw
     icon: "mdi:fire"
@@ -110,7 +211,7 @@ switch:
           }
 
   - platform: gpio
-    pin: GPIO12
+    pin: GPIO5     # Relay 2
     name: "Cool"
     id: cool_sw
     icon: "mdi:snowflake"
@@ -127,7 +228,7 @@ switch:
           }
 
   - platform: gpio
-    pin: GPIO14
+    pin: GPIO6     # Relay 3
     name: "Fan"
     id: fan_sw
     icon: "mdi:fan"
@@ -141,26 +242,63 @@ switch:
           }
 
   - platform: gpio
-    pin: GPIO26
+    pin: GPIO7     # Relay 4
     name: "UV"
     id: uv_sw
     icon: "mdi:lightbulb-alert"
     restore_mode: ALWAYS_OFF
 
+  # --- Changeover relays (5-7) - switch furnace between ESP32 and Pearl ---
+  # De-energized (NC) = Pearl controls furnace (fail-safe default)
+  # Energized (NO) = ESP32 controls furnace
+
   - platform: gpio
-    pin: GPIO27
+    pin: GPIO15    # Relay 5 - W changeover
+    name: "Changeover W"
+    id: changeover_w
+    icon: "mdi:swap-horizontal"
+    restore_mode: ALWAYS_OFF
+    internal: true
+
+  - platform: gpio
+    pin: GPIO16    # Relay 6 - Y changeover
+    name: "Changeover Y"
+    id: changeover_y
+    icon: "mdi:swap-horizontal"
+    restore_mode: ALWAYS_OFF
+    internal: true
+
+  - platform: gpio
+    pin: GPIO17    # Relay 7 - G changeover
+    name: "Changeover G"
+    id: changeover_g
+    icon: "mdi:swap-horizontal"
+    restore_mode: ALWAYS_OFF
+    internal: true
+
+  # --- Bypass (virtual switch - controls changeover relays as a group) ---
+
+  - platform: template
     name: "Bypass"
     id: bypass_sw
     icon: "mdi:gate-open"
     restore_mode: ALWAYS_OFF
-    on_turn_on:
-      # Bypass: kill all other relays, turn on warning LED
+    optimistic: true
+    turn_on_action:
+      # Enter bypass: kill ESP32 control, de-energize changeover -> Pearl
       - switch.turn_off: heat_sw
       - switch.turn_off: cool_sw
       - switch.turn_off: fan_sw
       - switch.turn_off: uv_sw
+      - switch.turn_off: changeover_w
+      - switch.turn_off: changeover_y
+      - switch.turn_off: changeover_g
       - output.turn_on: warning_led
-    on_turn_off:
+    turn_off_action:
+      # Exit bypass: energize changeover -> ESP32 in control
+      - switch.turn_on: changeover_w
+      - switch.turn_on: changeover_y
+      - switch.turn_on: changeover_g
       - output.turn_off: warning_led
 
   - platform: restart
@@ -171,7 +309,7 @@ switch:
 # ---------------------------------------------------------------------------
 output:
   - platform: gpio
-    pin: GPIO23
+    pin: GPIO10
     id: warning_led
 
 # ---------------------------------------------------------------------------
@@ -180,7 +318,7 @@ output:
 binary_sensor:
   - platform: gpio
     pin:
-      number: GPIO0
+      number: GPIO11
       mode: INPUT_PULLUP
       inverted: true
     name: "Bypass Button"

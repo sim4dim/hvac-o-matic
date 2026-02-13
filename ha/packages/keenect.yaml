@@ -27,6 +27,38 @@ input_number:
     unit_of_measurement: minutes
     icon: mdi:fan-clock
 
+  keenect_hysteresis:
+    name: Keenect Hysteresis
+    min: 0.1
+    max: 2.0
+    step: 0.1
+    unit_of_measurement: "°F"
+    icon: mdi:thermometer-lines
+
+  cool_lockout_temp:
+    name: Cool Lockout Temp
+    min: 30
+    max: 70
+    step: 1
+    unit_of_measurement: "°F"
+    icon: mdi:snowflake-alert
+
+  furnace_btu_input:
+    name: Furnace BTU Input (per hour)
+    min: 10000
+    max: 200000
+    step: 1000
+    unit_of_measurement: "BTU/h"
+    icon: mdi:fire
+
+  gas_price_per_therm:
+    name: Gas Price per Therm
+    min: 0.10
+    max: 5.00
+    step: 0.01
+    unit_of_measurement: "$/therm"
+    icon: mdi:currency-usd
+
 input_boolean:
   keenect_enabled:
     name: Keenect Enabled
@@ -39,3 +71,23 @@ input_boolean:
   enable_circulation:
     name: Enable Continuous Circulation
     icon: mdi:fan-auto
+
+utility_meter:
+  hvac_heat_cost_daily:
+    source: sensor.hvac_heat_cost
+    cycle: daily
+  hvac_heat_cost_monthly:
+    source: sensor.hvac_heat_cost
+    cycle: monthly
+  hvac_heat_runtime_daily:
+    source: sensor.hvac_heat_runtime
+    cycle: daily
+  hvac_heat_runtime_monthly:
+    source: sensor.hvac_heat_runtime
+    cycle: monthly
+  hvac_cool_runtime_daily:
+    source: sensor.hvac_cool_runtime
+    cycle: daily
+  hvac_cool_runtime_monthly:
+    source: sensor.hvac_cool_runtime
+    cycle: monthly
