@@ -6,7 +6,7 @@ Controls Keen smart vents via Hubitat integration (Zigbee radios on Hubitat).
 HVAC furnace controlled directly via HTTP to Flask server (bypasses Hubitat).
 First floor servo register controlled via ESPHome native API (number entity).
 
-Version: 2.4.0
+Version: 2.4.1
 """
 
 import datetime as dt_mod
@@ -1163,14 +1163,17 @@ def on_startup():
         for zn in ZONES:
             if state.get(f"input_boolean.away_{zn}") == "on":
                 cur_heat = _float(f"input_number.{zn}_heat_setpoint")
-                if cur_heat is not None and cur_heat != away_heat:
+                cur_cool = _float(f"input_number.{zn}_cool_setpoint")
+                if cur_heat is not None and (cur_heat != away_heat or cur_cool != away_cool):
                     _st.setdefault("saved_setpoints", {})[zn] = {
                         "heat": cur_heat,
-                        "cool": _float(f"input_number.{zn}_cool_setpoint"),
+                        "cool": cur_cool,
                     }
                     input_number.set_value(entity_id=f"input_number.{zn}_heat_setpoint", value=away_heat)
                     input_number.set_value(entity_id=f"input_number.{zn}_cool_setpoint", value=away_cool)
                     log.info(f"keenect: startup - {zn} away, setpoints → {away_heat}/{away_cool}")
+                else:
+                    log.info(f"keenect: startup - {zn} away, setpoints already correct")
         if _enabled():
             # _eval_master will: re-evaluate zones (with persisted state for hysteresis),
             # re-send vent commands (vent_levels cleared), and turn furnace on/off as needed.
@@ -1393,8 +1396,8 @@ def on_away_change(**kwargs):
             # Restore saved setpoints or zone defaults
             saved = _st.get("saved_setpoints", {}).get(zone_name)
             defaults = ZONE_DEFAULTS.get(zone_name, {"heat": 62, "cool": 76})
-            heat_restore = saved["heat"] if saved and saved.get("heat") else defaults["heat"]
-            cool_restore = saved["cool"] if saved and saved.get("cool") else defaults["cool"]
+            heat_restore = saved["heat"] if saved and saved.get("heat") is not None else defaults["heat"]
+            cool_restore = saved["cool"] if saved and saved.get("cool") is not None else defaults["cool"]
             input_number.set_value(entity_id=heat_key, value=heat_restore)
             input_number.set_value(entity_id=cool_key, value=cool_restore)
             log.info(f"keenect: {zone_name} away OFF — setpoints → {heat_restore}/{cool_restore}")
@@ -1674,40 +1677,56 @@ def _learn_drift_rates():
 
 
 def _update_drift_sensors(drift):
-    """Publish drift rate sensors for each zone."""
+    """Publish drift rate sensors showing estimated overnight temp drop."""
     if not drift:
         return
-    # Rank zones by heat loss rate
-    ranked = sorted(drift.items(), key=lambda x: x[1]["heat_loss"], reverse=True)
+    OVERNIGHT_HOURS = 8
+    outdoor = _outdoor_temp()
+
+    # Compute overnight drop for each zone
+    drops = {}
+    for z, d in drift.items():
+        rate = d["heat_loss"] / 1000.0  # convert m°F/h/°F back to °F/h/°F
+        zone = ZONES.get(z)
+        indoor = _float(zone["temp_sensor"]) if zone else None
+        if indoor is not None and outdoor is not None and rate > 0:
+            diff = abs(indoor - outdoor)
+            drop = round(rate * OVERNIGHT_HOURS * diff, 1)
+        else:
+            drop = round(rate * OVERNIGHT_HOURS * 40, 1)  # assume 40°F diff as fallback
+        drops[z] = drop
+
+    ranked = sorted(drops.items(), key=lambda x: x[1], reverse=True)
     worst_zone = ranked[0][0] if ranked else ""
+    avg_drop = sum([v for v in drops.values()]) / len(drops) if drops else 0
 
     for z, d in drift.items():
         display = z.replace("_", " ").title()
-        loss = d["heat_loss"]
-        if loss == 0:
+        drop = drops.get(z, 0)
+        if drop == 0:
             label = "No data"
             icon = "mdi:help-circle"
         elif z == worst_zone and len(drift) > 1:
-            label = f"Leakiest ({loss})"
+            label = f"~{drop}°F/night (leakiest)"
             icon = "mdi:thermometer-alert"
-        elif loss > ranked[0][1]["heat_loss"] * 0.8:
-            label = f"High ({loss})"
+        elif drop > avg_drop * 1.2:
+            label = f"~{drop}°F/night"
             icon = "mdi:thermometer-minus"
         else:
-            label = f"Good ({loss})"
+            label = f"~{drop}°F/night"
             icon = "mdi:thermometer-check"
         state.set(f"sensor.keenect_drift_{z}", label, {
-            "friendly_name": f"{display} Drift",
+            "friendly_name": f"{display} Overnight Drop",
             "icon": icon,
-            "heat_loss_rate": loss,
+            "overnight_drop": drop,
+            "heat_loss_rate": d["heat_loss"],
             "heat_gain_rate": d["heat_gain"],
-            "unit_of_measurement": "m°F/h/°F",
         })
 
     state.set("sensor.keenect_drift", f"{len(drift)} zones", {
-        "friendly_name": "Zone Drift Rates",
+        "friendly_name": "Overnight Heat Loss",
         "icon": "mdi:home-thermometer",
-        "zones": {z: d for z, d in drift.items()},
+        "zones": {z: {"overnight_drop": drops.get(z, 0), **d} for z, d in drift.items()},
     })
 
 

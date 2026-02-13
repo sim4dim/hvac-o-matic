@@ -129,7 +129,7 @@ views:
           - type: custom:fold-entity-row
             head:
               entity: sensor.keenect_drift
-              name: "Drift (Insulation)"
+              name: "Overnight Heat Loss"
             entities:
               - entity: sensor.keenect_drift_ben
                 name: Ben
