@@ -1341,7 +1341,7 @@ def on_setpoint_change(**kwargs):
             new_f = float(new_val)
         except (TypeError, ValueError):
             return
-        if old_f == new_f:
+        if abs(old_f - new_f) < 0.5:
             return
         context = kwargs.get("context")
         user_id = context.user_id if context else None

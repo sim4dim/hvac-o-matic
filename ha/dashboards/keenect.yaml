@@ -14,6 +14,8 @@ views:
               - type: thermostat
                 show_current_as_primary: true
                 entity: climate.master_bedroom
+                features:
+                  - type: target-temperature
               - type: entities
                 entities:
                   - type: custom:fold-entity-row
@@ -39,6 +41,8 @@ views:
               - type: thermostat
                 show_current_as_primary: true
                 entity: climate.first_floor
+                features:
+                  - type: target-temperature
               - type: entities
                 entities:
                   - type: custom:fold-entity-row
@@ -61,6 +65,8 @@ views:
               - type: thermostat
                 show_current_as_primary: true
                 entity: climate.ben_s_room
+                features:
+                  - type: target-temperature
               - type: entities
                 entities:
                   - type: custom:fold-entity-row
@@ -82,6 +88,8 @@ views:
               - type: thermostat
                 show_current_as_primary: true
                 entity: climate.gene_s_room
+                features:
+                  - type: target-temperature
               - type: entities
                 entities:
                   - type: custom:fold-entity-row
@@ -249,3 +257,21 @@ views:
             name: Master BR
           - entity: sensor.keenect_vent_first_floor
             name: 1st Floor Servo
+
+      - type: history-graph
+        title: Daily Heating
+        hours_to_show: 168
+        entities:
+          - entity: sensor.hvac_heat_runtime_daily
+            name: Heat Hours
+          - entity: sensor.hvac_heat_cost_daily
+            name: Heat Cost ($)
+
+      - type: history-graph
+        title: Daily Cooling
+        hours_to_show: 168
+        entities:
+          - entity: sensor.hvac_cool_runtime_daily
+            name: Cool Hours
+          - entity: sensor.hvac_cool_cost_daily
+            name: Cool Cost ($)

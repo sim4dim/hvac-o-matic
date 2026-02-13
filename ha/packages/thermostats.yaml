@@ -134,7 +134,7 @@ climate:
               input_number.gene_heat_setpoint
             {% endif %}
         data:
-          value: "{{ temperature }}"
+          value: "{{ temperature | round(0) | int }}"
 
     set_hvac_mode:
       - service: input_select.select_option
@@ -189,7 +189,7 @@ climate:
               input_number.ben_heat_setpoint
             {% endif %}
         data:
-          value: "{{ temperature }}"
+          value: "{{ temperature | round(0) | int }}"
 
     set_hvac_mode:
       - service: input_select.select_option
@@ -244,7 +244,7 @@ climate:
               input_number.mbr_heat_setpoint
             {% endif %}
         data:
-          value: "{{ temperature }}"
+          value: "{{ temperature | round(0) | int }}"
 
     set_hvac_mode:
       - service: input_select.select_option
@@ -299,7 +299,7 @@ climate:
               input_number.first_floor_heat_setpoint
             {% endif %}
         data:
-          value: "{{ temperature }}"
+          value: "{{ temperature | round(0) | int }}"
 
     set_hvac_mode:
       - service: input_select.select_option
