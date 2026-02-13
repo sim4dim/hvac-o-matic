@@ -75,6 +75,22 @@ input_number:
     unit_of_measurement: "$/kWh"
     icon: mdi:flash
 
+  away_heat_setpoint:
+    name: Away Heat Setpoint
+    min: 45
+    max: 65
+    step: 1
+    unit_of_measurement: "°F"
+    icon: mdi:thermometer-low
+
+  away_cool_setpoint:
+    name: Away Cool Setpoint
+    min: 78
+    max: 90
+    step: 1
+    unit_of_measurement: "°F"
+    icon: mdi:thermometer-high
+
 input_boolean:
   keenect_enabled:
     name: Keenect Enabled
@@ -87,6 +103,22 @@ input_boolean:
   enable_circulation:
     name: Enable Continuous Circulation
     icon: mdi:fan-auto
+
+  away_ben:
+    name: "Ben's Room Away"
+    icon: mdi:home-export-outline
+
+  away_gene:
+    name: "Gene's Room Away"
+    icon: mdi:home-export-outline
+
+  away_mbr:
+    name: "Master Bedroom Away"
+    icon: mdi:home-export-outline
+
+  away_first_floor:
+    name: "First Floor Away"
+    icon: mdi:home-export-outline
 
 utility_meter:
   hvac_heat_cost_daily:

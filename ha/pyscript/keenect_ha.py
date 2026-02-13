@@ -666,8 +666,19 @@ def _eval_zone(zone_name):
     heat_sp = float(heat_sp) if heat_sp is not None else None
     cool_sp = float(cool_sp) if cool_sp is not None else None
 
+    # Away mode: override setpoints with away values (wider deadband)
+    away_entity = f"input_boolean.away_{zone_name}"
+    if state.get(away_entity) == "on":
+        away_heat = _float("input_number.away_heat_setpoint", 55.0)
+        away_cool = _float("input_number.away_cool_setpoint", 85.0)
+        if heat_sp is not None:
+            heat_sp = min(heat_sp, away_heat)
+        if cool_sp is not None:
+            cool_sp = max(cool_sp, away_cool)
+
     # Thermostat's hvac_action is the stateless start signal (temp < setpoint).
-    # Pyscript adds hysteresis for the stop direction only (keep going past setpoint).
+    # In away mode, thermostat still uses normal setpoints, so we evaluate demand ourselves.
+    is_away = state.get(away_entity) == "on"
     op_raw = _get_climate_attr(tstat, "hvac_action")
     tstat_action = (str(op_raw) if op_raw else "idle").upper()
 
@@ -676,19 +687,23 @@ def _eval_zone(zone_name):
     hyst = _hysteresis()
 
     # Hybrid hysteresis:
-    #   START heating: thermostat says "heating" (temp < setpoint) — stateless, survives reload
+    #   START heating: temp < setpoint (away: pyscript evaluates; normal: thermostat says "heating")
     #   STOP heating:  pyscript keeps heating until temp >= setpoint + hysteresis
-    #   START cooling: thermostat says "cooling" (temp > setpoint) — stateless
+    #   START cooling: temp > setpoint (away: pyscript evaluates; normal: thermostat says "cooling")
     #   STOP cooling:  pyscript keeps cooling until temp <= setpoint - hysteresis
     op = "IDLE"
     if mode == "HEAT" and heat_sp is not None:
         if old == "HEATING":
             op = "IDLE" if temp >= heat_sp + hyst else "HEATING"
+        elif is_away and temp < heat_sp:
+            op = "HEATING"
         elif tstat_action == "HEATING":
             op = "HEATING"
     elif mode == "COOL" and cool_sp is not None:
         if old == "COOLING":
             op = "IDLE" if temp <= cool_sp - hyst else "COOLING"
+        elif is_away and temp > cool_sp:
+            op = "COOLING"
         elif tstat_action == "COOLING":
             op = "COOLING"
 
@@ -1504,15 +1519,23 @@ def _update_zone_rates_sensor(rates, factors):
         }
         # Per-zone sensor for dashboard display
         display = z.replace("_", " ").title()
-        summary = f"H:{r['heat_rate']}°F/h C:{r['cool_rate']}°F/h"
-        state.set(f"sensor.keenect_rate_{z}", summary, {
+        avg_factor = (hf + cf) / 2 if hf and cf else hf or cf or 1.0
+        if avg_factor > 1.05:
+            label = f"Boost ({avg_factor:.1f}x)"
+            icon = "mdi:arrow-up-bold"
+        elif avg_factor < 0.95:
+            label = f"Reduced ({avg_factor:.1f}x)"
+            icon = "mdi:arrow-down-bold"
+        else:
+            label = "Normal"
+            icon = "mdi:minus"
+        state.set(f"sensor.keenect_rate_{z}", label, {
             "friendly_name": f"{display} Rate",
-            "icon": "mdi:thermometer-lines",
-            "heat_rate": r["heat_rate"],
-            "cool_rate": r["cool_rate"],
+            "icon": icon,
+            "heat_rate": f"{r['heat_rate']}°F/h",
+            "cool_rate": f"{r['cool_rate']}°F/h",
             "heat_factor": hf,
             "cool_factor": cf,
-            "unit_of_measurement": "°F/h",
         })
     state.set("sensor.keenect_zone_rates", "Learned", {
         "friendly_name": "Zone Learning Rates",

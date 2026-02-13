@@ -31,6 +31,8 @@ views:
                         name: Vent 2 Battery
                       - entity: input_boolean.circ_optout_mbr
                         name: Circulation Opt-out
+                      - entity: input_boolean.away_mbr
+                        name: Away Mode
 
           - type: vertical-stack
             cards:
@@ -46,6 +48,8 @@ views:
                     entities:
                       - entity: input_boolean.circ_optout_first_floor
                         name: Circulation Opt-out
+                      - entity: input_boolean.away_first_floor
+                        name: Away Mode
 
       # Row 2: Ben's Room, Gene's Room
       - type: grid
@@ -70,6 +74,8 @@ views:
                         name: Vent Battery
                       - entity: input_boolean.circ_optout_ben
                         name: Circulation Opt-out
+                      - entity: input_boolean.away_ben
+                        name: Away Mode
 
           - type: vertical-stack
             cards:
@@ -89,6 +95,8 @@ views:
                         name: Vent Battery
                       - entity: input_boolean.circ_optout_gene
                         name: Circulation Opt-out
+                      - entity: input_boolean.away_gene
+                        name: Away Mode
 
       # Row 3: Controls (below zones)
       - type: entities
@@ -150,6 +158,10 @@ views:
               type: section
               label: Settings
             entities:
+              - entity: input_number.away_heat_setpoint
+                name: Away Heat Setpoint
+              - entity: input_number.away_cool_setpoint
+                name: Away Cool Setpoint
               - entity: input_number.cool_lockout_temp
                 name: Cool Lockout Temp
               - entity: input_number.keenect_hysteresis
