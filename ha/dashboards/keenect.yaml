@@ -126,6 +126,19 @@ views:
                 name: Master BR
               - entity: sensor.keenect_rate_first_floor
                 name: 1st Floor
+          - type: custom:fold-entity-row
+            head:
+              entity: sensor.keenect_drift
+              name: "Drift (Insulation)"
+            entities:
+              - entity: sensor.keenect_drift_ben
+                name: Ben
+              - entity: sensor.keenect_drift_gene
+                name: Gene
+              - entity: sensor.keenect_drift_mbr
+                name: Master BR
+              - entity: sensor.keenect_drift_first_floor
+                name: 1st Floor
           - entity: input_select.hvac_mode
             name: HVAC Mode
             tap_action:

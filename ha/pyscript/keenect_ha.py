@@ -66,6 +66,14 @@ ZONES = {
     },
 }
 
+# Default setpoints for restoring from away mode
+ZONE_DEFAULTS = {
+    "ben": {"heat": 62, "cool": 76},
+    "gene": {"heat": 62, "cool": 76},
+    "mbr": {"heat": 64, "cool": 76},
+    "first_floor": {"heat": 69, "cool": 76},
+}
+
 # HVAC Flask server - direct HTTP control (bypasses Hubitat driver)
 HVAC_SERVER = "http://192.168.1.123:5000"
 # Servo register now controlled via ESPHome native API (number entity)
@@ -1142,8 +1150,27 @@ def on_startup():
                 _st["zone_vent_factors"] = factors
                 _update_zone_rates_sensor(rates, factors)
                 log.info(f"keenect: startup zone learning - {len(rates)} zones analyzed")
+            drift = _learn_drift_rates()
+            if drift:
+                _st["zone_drift"] = drift
+                _update_drift_sensors(drift)
+                log.info(f"keenect: startup drift analysis - {len(drift)} zones")
         except Exception as e:
             log.warning(f"keenect: startup zone learning failed: {e}")
+        # Apply away setpoints for zones already in away mode
+        away_heat = _float("input_number.away_heat_setpoint", 55.0)
+        away_cool = _float("input_number.away_cool_setpoint", 85.0)
+        for zn in ZONES:
+            if state.get(f"input_boolean.away_{zn}") == "on":
+                cur_heat = _float(f"input_number.{zn}_heat_setpoint")
+                if cur_heat is not None and cur_heat != away_heat:
+                    _st.setdefault("saved_setpoints", {})[zn] = {
+                        "heat": cur_heat,
+                        "cool": _float(f"input_number.{zn}_cool_setpoint"),
+                    }
+                    input_number.set_value(entity_id=f"input_number.{zn}_heat_setpoint", value=away_heat)
+                    input_number.set_value(entity_id=f"input_number.{zn}_cool_setpoint", value=away_cool)
+                    log.info(f"keenect: startup - {zn} away, setpoints → {away_heat}/{away_cool}")
         if _enabled():
             # _eval_master will: re-evaluate zones (with persisted state for hysteresis),
             # re-send vent commands (vent_levels cleared), and turn furnace on/off as needed.
@@ -1334,6 +1361,45 @@ def on_setpoint_change(**kwargs):
         _save_setpoint_log()
     except Exception as e:
         log.error(f"keenect: on_setpoint_change crashed: {e}")
+
+
+@state_trigger(
+    "input_boolean.away_ben", "input_boolean.away_gene",
+    "input_boolean.away_mbr", "input_boolean.away_first_floor",
+)
+def on_away_change(**kwargs):
+    """Update thermostat setpoints when away mode is toggled."""
+    try:
+        eid = kwargs.get("var_name", "")
+        zone_name = eid.replace("input_boolean.away_", "")
+        if zone_name not in ZONES:
+            return
+        new_val = kwargs.get("value")
+        heat_key = f"input_number.{zone_name}_heat_setpoint"
+        cool_key = f"input_number.{zone_name}_cool_setpoint"
+
+        if new_val == "on":
+            # Save current setpoints, then apply away values
+            _st.setdefault("saved_setpoints", {})[zone_name] = {
+                "heat": _float(heat_key),
+                "cool": _float(cool_key),
+            }
+            away_heat = _float("input_number.away_heat_setpoint", 55.0)
+            away_cool = _float("input_number.away_cool_setpoint", 85.0)
+            input_number.set_value(entity_id=heat_key, value=away_heat)
+            input_number.set_value(entity_id=cool_key, value=away_cool)
+            log.info(f"keenect: {zone_name} away ON — setpoints → {away_heat}/{away_cool}")
+        elif new_val == "off":
+            # Restore saved setpoints or zone defaults
+            saved = _st.get("saved_setpoints", {}).get(zone_name)
+            defaults = ZONE_DEFAULTS.get(zone_name, {"heat": 62, "cool": 76})
+            heat_restore = saved["heat"] if saved and saved.get("heat") else defaults["heat"]
+            cool_restore = saved["cool"] if saved and saved.get("cool") else defaults["cool"]
+            input_number.set_value(entity_id=heat_key, value=heat_restore)
+            input_number.set_value(entity_id=cool_key, value=cool_restore)
+            log.info(f"keenect: {zone_name} away OFF — setpoints → {heat_restore}/{cool_restore}")
+    except Exception as e:
+        log.error(f"keenect: on_away_change crashed: {e}")
 
 
 @time_trigger("cron(*/5 * * * *)")
@@ -1544,9 +1610,110 @@ def _update_zone_rates_sensor(rates, factors):
     })
 
 
+def _learn_drift_rates():
+    """Analyze how fast each zone loses heat when HVAC is off (insulation metric)."""
+    outdoor_temps = _influx_series("outdoor_temperature", days=ZONE_LEARN_DAYS, interval_min=30)
+    if len(outdoor_temps) < 10:
+        log.warning("keenect: drift analysis - no outdoor temp data")
+        return {}
+
+    drift = {}
+    for zone_name, zone in ZONES.items():
+        entity_short = zone["temp_sensor"].replace("sensor.", "")
+        try:
+            zone_temps = _influx_series(entity_short, days=ZONE_LEARN_DAYS, interval_min=30)
+        except Exception:
+            continue
+        if len(zone_temps) < 10:
+            continue
+
+        # Use the shorter list length
+        n = min(len(zone_temps), len(outdoor_temps))
+        heat_loss_rates = []  # °F/h per °F delta (winter: indoor dropping toward outdoor)
+        heat_gain_rates = []  # °F/h per °F delta (summer: indoor rising toward outdoor)
+
+        for i in range(1, n):
+            indoor = zone_temps[i - 1]
+            indoor_next = zone_temps[i]
+            outdoor = outdoor_temps[i - 1]
+            delta_indoor = indoor_next - indoor  # negative = cooling
+            diff = indoor - outdoor  # positive in winter (indoor warmer)
+
+            if abs(diff) < 5:
+                continue  # Not enough temp difference to measure drift
+
+            rate_per_hour = delta_indoor * 2  # 30-min → hourly
+
+            # Heat loss: indoor dropping, indoor > outdoor (winter drift)
+            if diff > 5 and rate_per_hour < -0.1:
+                # Normalize: °F lost per hour per °F of indoor-outdoor difference
+                normalized = abs(rate_per_hour) / diff
+                if normalized < 0.15:  # Filter out HVAC-off events only (not huge drops)
+                    heat_loss_rates.append(normalized)
+
+            # Heat gain: indoor rising, outdoor > indoor (summer drift)
+            if diff < -5 and rate_per_hour > 0.1:
+                normalized = rate_per_hour / abs(diff)
+                if normalized < 0.15:
+                    heat_gain_rates.append(normalized)
+
+        heat_loss_rates.sort()
+        heat_gain_rates.sort()
+
+        loss_med = heat_loss_rates[len(heat_loss_rates) // 2] if heat_loss_rates else 0
+        gain_med = heat_gain_rates[len(heat_gain_rates) // 2] if heat_gain_rates else 0
+
+        drift[zone_name] = {
+            "heat_loss": round(loss_med * 1000, 1),  # milli-°F/h per °F delta (easier to read)
+            "heat_gain": round(gain_med * 1000, 1),
+            "loss_samples": len(heat_loss_rates),
+            "gain_samples": len(heat_gain_rates),
+        }
+
+    return drift
+
+
+def _update_drift_sensors(drift):
+    """Publish drift rate sensors for each zone."""
+    if not drift:
+        return
+    # Rank zones by heat loss rate
+    ranked = sorted(drift.items(), key=lambda x: x[1]["heat_loss"], reverse=True)
+    worst_zone = ranked[0][0] if ranked else ""
+
+    for z, d in drift.items():
+        display = z.replace("_", " ").title()
+        loss = d["heat_loss"]
+        if loss == 0:
+            label = "No data"
+            icon = "mdi:help-circle"
+        elif z == worst_zone and len(drift) > 1:
+            label = f"Leakiest ({loss})"
+            icon = "mdi:thermometer-alert"
+        elif loss > ranked[0][1]["heat_loss"] * 0.8:
+            label = f"High ({loss})"
+            icon = "mdi:thermometer-minus"
+        else:
+            label = f"Good ({loss})"
+            icon = "mdi:thermometer-check"
+        state.set(f"sensor.keenect_drift_{z}", label, {
+            "friendly_name": f"{display} Drift",
+            "icon": icon,
+            "heat_loss_rate": loss,
+            "heat_gain_rate": d["heat_gain"],
+            "unit_of_measurement": "m°F/h/°F",
+        })
+
+    state.set("sensor.keenect_drift", f"{len(drift)} zones", {
+        "friendly_name": "Zone Drift Rates",
+        "icon": "mdi:home-thermometer",
+        "zones": {z: d for z, d in drift.items()},
+    })
+
+
 @time_trigger("cron(0 3 * * *)")
 def daily_zone_learning():
-    """Daily zone rate analysis from InfluxDB history."""
+    """Daily zone rate + drift analysis from InfluxDB history."""
     try:
         rates = _learn_zone_rates()
         if not rates:
@@ -1556,6 +1723,13 @@ def daily_zone_learning():
         _st["zone_rates"] = rates
         _st["zone_vent_factors"] = factors
         _update_zone_rates_sensor(rates, factors)
+
+        drift = _learn_drift_rates()
+        if drift:
+            _st["zone_drift"] = drift
+            _update_drift_sensors(drift)
+            log.info(f"keenect: drift analysis complete - {drift}")
+
         log.info(f"keenect: zone learning complete - rates={rates} factors={factors}")
     except Exception as e:
         log.error(f"keenect: daily_zone_learning crashed: {e}")
