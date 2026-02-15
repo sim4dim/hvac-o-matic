@@ -176,6 +176,49 @@ interval:
   - interval: 5s
     then:
       - lambda: "id(display_page) = 1 - id(display_page);"
+  # Status LED: red=heat, blue=cool, green=idle, flash yellow=error
+  - interval: 500ms
+    then:
+      - lambda: |-
+          static bool flash = false;
+          flash = !flash;
+          if (id(watchdog_tripped)) {
+            // Error: flash yellow on/off
+            if (flash) {
+              auto call = id(status_led).turn_on();
+              call.set_rgb(1.0, 0.7, 0.0);
+              call.set_brightness(0.5);
+              call.perform();
+            } else {
+              auto call = id(status_led).turn_off();
+              call.perform();
+            }
+          } else if (id(bypass_sw).state) {
+            // Bypass: alternate yellow / blue
+            auto call = id(status_led).turn_on();
+            call.set_brightness(0.5);
+            if (flash) {
+              call.set_rgb(1.0, 0.7, 0.0);
+            } else {
+              call.set_rgb(0.0, 0.0, 1.0);
+            }
+            call.perform();
+          } else if (id(heat_sw).state) {
+            auto call = id(status_led).turn_on();
+            call.set_rgb(1.0, 0.0, 0.0);
+            call.set_brightness(0.5);
+            call.perform();
+          } else if (id(cool_sw).state) {
+            auto call = id(status_led).turn_on();
+            call.set_rgb(0.0, 0.0, 1.0);
+            call.set_brightness(0.5);
+            call.perform();
+          } else {
+            auto call = id(status_led).turn_on();
+            call.set_rgb(0.0, 1.0, 0.0);
+            call.set_brightness(0.3);
+            call.perform();
+          }
 
 # ---------------------------------------------------------------------------
 # I2C bus - shared by BME280, BME680, SSD1306
@@ -303,6 +346,20 @@ switch:
 
   - platform: restart
     name: "Restart"
+
+# ---------------------------------------------------------------------------
+# Onboard RGB LED (WS2812 on GPIO48)
+# ---------------------------------------------------------------------------
+light:
+  - platform: esp32_rmt_led_strip
+    chipset: WS2812
+    pin: GPIO48
+    num_leds: 1
+    rgb_order: GRB
+    rmt_channel: 0
+    name: "Status LED"
+    id: status_led
+    internal: true
 
 # ---------------------------------------------------------------------------
 # Warning LED

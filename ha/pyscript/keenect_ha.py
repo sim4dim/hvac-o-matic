@@ -103,6 +103,14 @@ HVAC_MQTT_MAP = {
 
 OUTDOOR_TEMP_ENTITY = "sensor.outdoor_temperature"
 
+# Supply/return duct sensors (ESPHome hvac-controller)
+SUPPLY_TEMP_ENTITY = "sensor.hvac_controller_supply_temperature"
+RETURN_TEMP_ENTITY = "sensor.hvac_controller_return_temperature"
+# Warmup: hold vents at minimum until supply air is conditioned
+WARMUP_HEAT_DELTA = 15  # supply must be this much warmer than return (°F)
+WARMUP_COOL_DELTA = 10  # supply must be this much cooler than return (°F)
+WARMUP_FIXED_DELAY = 120  # fallback/max delay (seconds)
+
 # Setpoint change tracking — maps input_number to (zone, heat/cool)
 _SETPOINT_MAP = {
     "input_number.ben_heat_setpoint": ("ben", "heat"),
@@ -153,6 +161,7 @@ _st = {
     "heat_cost": 0.0,           # cumulative heating cost ($)
     "cool_runtime": 0.0,        # cumulative cooling hours
     "cool_cost": 0.0,           # cumulative cooling cost ($)
+    "warmup_start": None,       # timestamp when HVAC cycle started (for vent delay)
 }
 
 
@@ -484,7 +493,8 @@ def _hvac_turn_on():
     else:
         return
     _st["hvac_on"] = True
-    log.info(f"keenect: HVAC ON in {mode} mode")
+    _st["warmup_start"] = time_mod.time()
+    log.info(f"keenect: HVAC ON in {mode} mode (warmup started)")
 
 
 def _hvac_turn_off():
@@ -506,6 +516,7 @@ def _hvac_turn_off():
 
     _st["main_state"] = "IDLE"
     _st["hvac_on"] = False
+    _st["warmup_start"] = None
 
     # Schedule delayed vent closure (checked in periodic eval)
     # Skip if recirculation or continuous circulation is active (vents should stay open)
@@ -514,6 +525,47 @@ def _hvac_turn_off():
         _st["vents_closed_after_off"] = False
         delay = _vent_delay()
         log.info(f"keenect: vent closure in {delay}s (timer-based)")
+
+
+# ---------------------------------------------------------------------------
+# Supply air warmup check
+# ---------------------------------------------------------------------------
+def _is_warming_up():
+    """Check if HVAC is still warming up (supply air not yet conditioned).
+
+    Uses supply/return duct temp delta from ESPHome sensors when available,
+    falls back to fixed 120s delay if sensors are offline.
+    """
+    if not _st["hvac_on"]:
+        return False
+    start = _st.get("warmup_start")
+    if start is None:
+        return False
+
+    supply = _float(SUPPLY_TEMP_ENTITY)
+    ret = _float(RETURN_TEMP_ENTITY)
+    elapsed = time_mod.time() - start
+
+    # Sensor-based check: supply air is conditioned
+    if supply is not None and ret is not None:
+        mode = _hvac_mode()
+        if mode == "HEAT" and supply >= ret + WARMUP_HEAT_DELTA:
+            _st["warmup_start"] = None
+            log.info(f"keenect: warmup done - supply {supply:.1f}°F >= return {ret:.1f}°F + {WARMUP_HEAT_DELTA} ({elapsed:.0f}s)")
+            return False
+        if mode == "COOL" and supply <= ret - WARMUP_COOL_DELTA:
+            _st["warmup_start"] = None
+            log.info(f"keenect: warmup done - supply {supply:.1f}°F <= return {ret:.1f}°F - {WARMUP_COOL_DELTA} ({elapsed:.0f}s)")
+            return False
+
+    # Fixed delay fallback (no sensors) or max timeout (sensors present but threshold not met)
+    if elapsed >= WARMUP_FIXED_DELAY:
+        reason = "fixed delay" if supply is None or ret is None else "max timeout"
+        _st["warmup_start"] = None
+        log.info(f"keenect: warmup done ({reason}, {elapsed:.0f}s)")
+        return False
+
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -721,6 +773,7 @@ def _eval_zone(zone_name):
 def _apply_zone_vents(results):
     """Apply vent actions using complete zone state picture (order-independent).
     Called after all zones have been evaluated."""
+    warming_up = _is_warming_up()
     for zone_name, r in results.items():
         op = r["op"]
         old = r["old"]
@@ -739,6 +792,12 @@ def _apply_zone_vents(results):
             else:
                 target = r["heat_sp"]
             opening = _calc_opening(zone_name, op, temp, target)
+            # During warmup, cap vents at minimum to avoid blowing unconditioned air
+            if warming_up and op in ("HEATING", "COOLING"):
+                zone = ZONES[zone_name]
+                min_vo = zone["heat_min_vo"] if op == "HEATING" else zone["cool_min_vo"]
+                if opening > min_vo:
+                    opening = min_vo
             _set_vent(zone_name, opening)
         elif op == "IDLE" and old != "IDLE":
             # Zone just went idle — check others using the COMPLETE new state picture
