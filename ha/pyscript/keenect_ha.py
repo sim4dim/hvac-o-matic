@@ -247,7 +247,10 @@ def _load_state():
 # ---------------------------------------------------------------------------
 def _float(entity_id, default=None):
     """Read entity state as float."""
-    val = state.get(entity_id)
+    try:
+        val = state.get(entity_id)
+    except Exception:
+        return default
     if val in (None, "unknown", "unavailable", ""):
         return default
     try:
@@ -542,11 +545,17 @@ def _is_warming_up():
     if start is None:
         return False
 
-    supply = _float(SUPPLY_TEMP_ENTITY)
-    ret = _float(RETURN_TEMP_ENTITY)
     elapsed = time_mod.time() - start
 
+    # Check timeout first (always works, even if sensors are missing)
+    if elapsed >= WARMUP_FIXED_DELAY:
+        _st["warmup_start"] = None
+        log.info(f"keenect: warmup done (timeout, {elapsed:.0f}s)")
+        return False
+
     # Sensor-based check: supply air is conditioned
+    supply = _float(SUPPLY_TEMP_ENTITY)
+    ret = _float(RETURN_TEMP_ENTITY)
     if supply is not None and ret is not None:
         mode = _hvac_mode()
         if mode == "HEAT" and supply >= ret + WARMUP_HEAT_DELTA:
@@ -557,13 +566,6 @@ def _is_warming_up():
             _st["warmup_start"] = None
             log.info(f"keenect: warmup done - supply {supply:.1f}°F <= return {ret:.1f}°F - {WARMUP_COOL_DELTA} ({elapsed:.0f}s)")
             return False
-
-    # Fixed delay fallback (no sensors) or max timeout (sensors present but threshold not met)
-    if elapsed >= WARMUP_FIXED_DELAY:
-        reason = "fixed delay" if supply is None or ret is None else "max timeout"
-        _st["warmup_start"] = None
-        log.info(f"keenect: warmup done ({reason}, {elapsed:.0f}s)")
-        return False
 
     return True
 
