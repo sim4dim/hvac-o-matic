@@ -1189,6 +1189,8 @@ def on_startup():
         # even while the furnace is still running.
         was_on = _st["hvac_on"]
         _st["hvac_on"] = False
+        _st["main_state"] = "IDLE"
+        _st["warmup_start"] = None
         _st["vent_levels"] = {}  # force vent re-sends
         if was_on:
             log.info("keenect: startup - was_on=True, will re-arm via eval")
