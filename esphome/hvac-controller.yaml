@@ -131,8 +131,13 @@ api:
     - globals.set:
         id: watchdog_tripped
         value: "false"
-    # HA connected - exit bypass, ESP32 takes control
-    - switch.turn_off: bypass_sw
+    # HA connected - exit bypass unless mirror mode
+    - lambda: |-
+        if (!id(mirror_mode)) {
+          id(bypass_sw).turn_off();
+        } else {
+          ESP_LOGI("mirror", "Mirror mode active - keeping bypass ON");
+        }
   on_client_disconnected:
     - logger.log: "API client disconnected - watchdog timer active"
 
@@ -145,8 +150,32 @@ web_server:
   version: 3
 
 mqtt:
+  id: mqtt_client
   broker: 192.168.1.10
   port: 1883
+  on_message:
+    - topic: hvac/mirror/command
+      then:
+        - lambda: |-
+            if (!id(mirror_mode)) return;
+            std::string p = x;
+            ESP_LOGI("mirror", "Received: %s", p.c_str());
+
+            auto has_key_val = [&](const char* key, const char* val) -> bool {
+              std::string search = std::string("\"") + key + "\": \"" + val + "\"";
+              if (p.find(search) != std::string::npos) return true;
+              // Try without space after colon
+              search = std::string("\"") + key + "\":\"" + val + "\"";
+              return p.find(search) != std::string::npos;
+            };
+
+            if (has_key_val("heat", "ON")) id(heat_sw).turn_on();
+            else if (has_key_val("heat", "OFF")) id(heat_sw).turn_off();
+
+            if (has_key_val("cool", "ON")) id(cool_sw).turn_on();
+            else if (has_key_val("cool", "OFF")) id(cool_sw).turn_off();
+
+            // fan is auto-managed by heat/cool on_turn_on/off - ignore standalone fan commands
 
 # ---------------------------------------------------------------------------
 # Globals for watchdog and display state
@@ -164,6 +193,10 @@ globals:
     type: uint8_t
     restore_value: false
     initial_value: "0"
+  - id: mirror_mode
+    type: bool
+    restore_value: true
+    initial_value: "true"
 
 # ---------------------------------------------------------------------------
 # Watchdog: enter bypass after 60 min with no API connection
@@ -211,6 +244,19 @@ interval:
           auto out = (esphome::light::AddressableLight *)led->get_output();
           out->get(0) = Color(r, g, b);
           out->schedule_show();
+  # Mirror mode: publish ESPHome relay state for comparison
+  - interval: 30s
+    then:
+      - lambda: |-
+          if (!id(mirror_mode)) return;
+          char buf[128];
+          snprintf(buf, sizeof(buf),
+            "{\"heat\":\"%s\",\"cool\":\"%s\",\"fan\":\"%s\",\"bypass\":\"%s\"}",
+            id(heat_sw).state ? "ON" : "OFF",
+            id(cool_sw).state ? "ON" : "OFF",
+            id(fan_sw).state ? "ON" : "OFF",
+            id(bypass_sw).state ? "ON" : "OFF");
+          id(mqtt_client).publish("hvac/mirror/esphome", std::string(buf), 0, true);
 
 # ---------------------------------------------------------------------------
 # I2C bus - shared by BME280, BME680, SSD1306
@@ -243,7 +289,8 @@ switch:
       - switch.turn_on: uv_sw
     on_turn_off:
       - lambda: |-
-          if (!id(cool_sw).state && !id(fan_sw).state) {
+          if (!id(cool_sw).state) {
+            id(fan_sw).turn_off();
             id(uv_sw).turn_off();
           }
 
@@ -262,7 +309,8 @@ switch:
       - switch.turn_on: uv_sw
     on_turn_off:
       - lambda: |-
-          if (!id(heat_sw).state && !id(fan_sw).state) {
+          if (!id(heat_sw).state) {
+            id(fan_sw).turn_off();
             id(uv_sw).turn_off();
           }
 
@@ -274,13 +322,6 @@ switch:
     id: fan_sw
     icon: "mdi:fan"
     restore_mode: ALWAYS_OFF
-    on_turn_on:
-      - switch.turn_on: uv_sw
-    on_turn_off:
-      - lambda: |-
-          if (!id(heat_sw).state && !id(cool_sw).state) {
-            id(uv_sw).turn_off();
-          }
 
   - platform: gpio
     pin:
@@ -359,6 +400,25 @@ switch:
       - switch.turn_on: changeover_y
       - switch.turn_on: changeover_g
       - output.turn_off: warning_led
+
+  - platform: template
+    name: "Mirror Mode"
+    id: mirror_sw
+    icon: "mdi:content-copy"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    turn_on_action:
+      - globals.set:
+          id: mirror_mode
+          value: "true"
+      - logger.log: "Mirror mode enabled - shadowing Flask controller"
+      # Force bypass ON (changeover relays off, Pearl controls furnace)
+      - switch.turn_on: bypass_sw
+    turn_off_action:
+      - globals.set:
+          id: mirror_mode
+          value: "false"
+      - logger.log: "Mirror mode disabled - normal operation"
 
   - platform: restart
     name: "Restart"

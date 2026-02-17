@@ -1,0 +1,41 @@
+# HVAC Mirror Monitoring - compare Flask vs ESPHome controller states
+# Deployed to /config/packages/hvac_mirror.yaml
+
+mqtt:
+  sensor:
+    - name: "Flask HVAC Command"
+      state_topic: "hvac/mirror/command"
+      value_template: >-
+        {% set p = value_json %}
+        {% if p.heat is defined and p.heat == 'ON' %}HEAT
+        {% elif p.cool is defined and p.cool == 'ON' %}COOL
+        {% elif p.fan is defined and p.fan == 'ON' %}FAN
+        {% elif p.heat is defined and p.heat == 'OFF' and p.cool is defined %}OFF
+        {% else %}{{ value }}
+        {% endif %}
+      json_attributes_topic: "hvac/mirror/command"
+      icon: "mdi:fire"
+
+    - name: "ESPHome HVAC State"
+      state_topic: "hvac/mirror/esphome"
+      value_template: >-
+        {% set p = value_json %}
+        {% if p.heat == 'ON' %}HEAT
+        {% elif p.cool == 'ON' %}COOL
+        {% elif p.fan == 'ON' %}FAN
+        {% else %}OFF
+        {% endif %}
+      json_attributes_topic: "hvac/mirror/esphome"
+      icon: "mdi:chip"
+
+  binary_sensor:
+    - name: "HVAC Mirror Match"
+      state_topic: "hvac/mirror/esphome"
+      value_template: >-
+        {% set flask = states('sensor.flask_hvac_command') %}
+        {% set esp = states('sensor.esphome_hvac_state') %}
+        {{ 'ON' if flask == esp else 'OFF' }}
+      device_class: problem
+      payload_on: "OFF"
+      payload_off: "ON"
+      icon: "mdi:check-circle"

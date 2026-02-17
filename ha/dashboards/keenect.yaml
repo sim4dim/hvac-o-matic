@@ -275,3 +275,33 @@ views:
             name: Cool Hours
           - entity: sensor.hvac_cool_cost_daily
             name: Cool Cost ($)
+
+  - title: Mirror Test
+    path: mirror-test
+    icon: mdi:swap-horizontal
+    cards:
+      - type: entities
+        title: ESPHome Mirror Comparison
+        show_header_toggle: false
+        entities:
+          - entity: binary_sensor.hvac_mirror_match
+            name: Mirror Match
+          - entity: sensor.flask_hvac_command
+            name: Flask HVAC Command
+          - entity: sensor.esphome_hvac_state
+            name: ESPHome HVAC State
+          - entity: switch.hvac_controller_mirror_mode
+            name: Mirror Mode
+          - entity: switch.hvac_controller_bypass
+            name: Bypass (ESPHome Direct Control)
+
+      - type: history-graph
+        title: Mirror Match History
+        hours_to_show: 24
+        entities:
+          - entity: binary_sensor.hvac_mirror_match
+            name: Match
+          - entity: sensor.flask_hvac_command
+            name: Flask Command
+          - entity: sensor.esphome_hvac_state
+            name: ESPHome State
