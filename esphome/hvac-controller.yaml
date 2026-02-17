@@ -218,6 +218,19 @@ interval:
             id(watchdog_tripped) = true;
             id(bypass_sw).turn_on();
           }
+  # Low memory warning
+  - interval: 30s
+    then:
+      - lambda: |-
+          float heap_kb = heap_caps_get_free_size(MALLOC_CAP_8BIT) / 1024.0;
+          if (heap_kb < 15.0) {
+            ESP_LOGE("memory", "CRITICAL: Free heap %.1f kB - REBOOTING!", heap_kb);
+            App.safe_reboot();
+          } else if (heap_kb < 30.0) {
+            ESP_LOGE("memory", "CRITICAL: Free heap %.1f kB!", heap_kb);
+          } else if (heap_kb < 60.0) {
+            ESP_LOGW("memory", "Low heap: %.1f kB", heap_kb);
+          }
   # Display page toggle
   - interval: 5s
     then:
@@ -257,6 +270,16 @@ interval:
             id(fan_sw).state ? "ON" : "OFF",
             id(bypass_sw).state ? "ON" : "OFF");
           id(mqtt_client).publish("hvac/mirror/esphome", std::string(buf), 0, true);
+  # MQTT memory reporting
+  - interval: 60s
+    then:
+      - lambda: |-
+          char buf[96];
+          snprintf(buf, sizeof(buf),
+            "{\"heap_kb\":%.1f,\"psram_kb\":%.0f}",
+            heap_caps_get_free_size(MALLOC_CAP_8BIT) / 1024.0,
+            heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024.0);
+          id(mqtt_client).publish("hvac/memory", std::string(buf), 0, false);
 
 # ---------------------------------------------------------------------------
 # I2C bus - shared by BME280, BME680, SSD1306
@@ -264,7 +287,7 @@ interval:
 i2c:
   sda: GPIO8
   scl: GPIO9
-  frequency: 400kHz
+  frequency: 100kHz
 
 # ---------------------------------------------------------------------------
 # Relay switches with safety interlocks
@@ -499,7 +522,9 @@ sensor:
     gas_resistance:
       name: "Return VOC"
       id: return_voc
+      unit_of_measurement: "kΩ"
       filters:
+        - skip_initial: 10
         - multiply: 0.001  # Ohm -> kOhm
 
   # Computed: pressure delta (supply - return)
@@ -524,6 +549,24 @@ sensor:
   - platform: internal_temperature
     name: "ESP32 Temperature"
     update_interval: 60s
+
+  # Memory monitoring
+  - platform: template
+    name: "Free Heap"
+    id: free_heap
+    unit_of_measurement: "kB"
+    accuracy_decimals: 1
+    entity_category: diagnostic
+    lambda: 'return heap_caps_get_free_size(MALLOC_CAP_8BIT) / 1024.0;'
+    update_interval: 30s
+  - platform: template
+    name: "Free PSRAM"
+    id: free_psram
+    unit_of_measurement: "kB"
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    lambda: 'return heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024.0;'
+    update_interval: 30s
 
 # ---------------------------------------------------------------------------
 # Display - SSD1306 128x64 OLED
@@ -553,7 +596,12 @@ display:
         } else {
           it.printf(0, 42, id(font1), "Bypass: OFF");
         }
-        it.printf(0, 54, id(font1), "IP: %s", id(ip_addr).state.c_str());
+        float heap_kb = heap_caps_get_free_size(MALLOC_CAP_8BIT) / 1024.0;
+        if (heap_kb < 60.0) {
+          it.printf(0, 54, id(font1), "!! Heap: %.0f kB !!", heap_kb);
+        } else {
+          it.printf(0, 54, id(font1), "Heap: %.0f kB", heap_kb);
+        }
       } else {
         // Sensor screen
         if (id(supply_temp).has_state()) {
@@ -571,8 +619,14 @@ display:
         if (id(pressure_delta).has_state()) {
           it.printf(0, 28, id(font1), "dP: %.1f hPa", id(pressure_delta).state);
         }
+        if (id(supply_temp).has_state() && id(return_temp).has_state()) {
+          float dt = id(supply_temp).state - id(return_temp).state;
+          it.printf(0, 42, id(font1), "dT: %+.1fF", dt);
+        }
         if (id(return_voc).has_state()) {
-          it.printf(0, 42, id(font1), "VOC: %.1f kOhm", id(return_voc).state);
+          auto voc = id(return_voc).state;
+          const char *label = voc > 200 ? "Good" : voc > 50 ? "Mod" : "Poor";
+          it.printf(0, 54, id(font1), "VOC: %s (%.0f)", label, voc);
         }
       }
 
