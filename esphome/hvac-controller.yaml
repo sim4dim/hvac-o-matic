@@ -1,6 +1,10 @@
 esphome:
   name: hvac-controller
   friendly_name: "HVAC Controller"
+  platformio_options:
+    board_build.flash_mode: dio
+    board_build.f_flash: 80000000L
+    board_build.flash_size: 16MB
 
 # ===========================================================================
 # WIRING DIAGRAM
@@ -97,6 +101,7 @@ esphome:
 esp32:
   board: esp32-s3-devkitc-1
   variant: esp32s3
+  flash_size: 16MB
   framework:
     type: esp-idf
 
@@ -134,6 +139,14 @@ api:
 ota:
   - platform: esphome
     password: !secret hvac_ota_password
+
+web_server:
+  port: 80
+  version: 3
+
+mqtt:
+  broker: 192.168.1.10
+  port: 1883
 
 # ---------------------------------------------------------------------------
 # Globals for watchdog and display state
@@ -176,49 +189,28 @@ interval:
   - interval: 5s
     then:
       - lambda: "id(display_page) = 1 - id(display_page);"
-  # Status LED: red=heat, blue=cool, green=idle, flash yellow=error
+  # Status LED color
   - interval: 500ms
     then:
       - lambda: |-
           static bool flash = false;
           flash = !flash;
+          auto led = id(status_led);
+          uint8_t r = 0, g = 0, b = 0;
           if (id(watchdog_tripped)) {
-            // Error: flash yellow on/off
-            if (flash) {
-              auto call = id(status_led).turn_on();
-              call.set_rgb(1.0, 0.7, 0.0);
-              call.set_brightness(0.5);
-              call.perform();
-            } else {
-              auto call = id(status_led).turn_off();
-              call.perform();
-            }
+            if (flash) { r = 255; g = 77; b = 0; }
           } else if (id(bypass_sw).state) {
-            // Bypass: alternate yellow / blue
-            auto call = id(status_led).turn_on();
-            call.set_brightness(0.5);
-            if (flash) {
-              call.set_rgb(1.0, 0.7, 0.0);
-            } else {
-              call.set_rgb(0.0, 0.0, 1.0);
-            }
-            call.perform();
+            r = 128; g = 0; b = 255;
           } else if (id(heat_sw).state) {
-            auto call = id(status_led).turn_on();
-            call.set_rgb(1.0, 0.0, 0.0);
-            call.set_brightness(0.5);
-            call.perform();
+            r = 255; g = 0; b = 0;
           } else if (id(cool_sw).state) {
-            auto call = id(status_led).turn_on();
-            call.set_rgb(0.0, 0.0, 1.0);
-            call.set_brightness(0.5);
-            call.perform();
+            r = 0; g = 0; b = 255;
           } else {
-            auto call = id(status_led).turn_on();
-            call.set_rgb(0.0, 1.0, 0.0);
-            call.set_brightness(0.3);
-            call.perform();
+            r = 0; g = 255; b = 0;
           }
+          auto out = (esphome::light::AddressableLight *)led->get_output();
+          out->get(0) = Color(r, g, b);
+          out->schedule_show();
 
 # ---------------------------------------------------------------------------
 # I2C bus - shared by BME280, BME680, SSD1306
@@ -237,7 +229,9 @@ switch:
 
   # HEAT and COOL are interlocked - cannot be on simultaneously
   - platform: gpio
-    pin: GPIO4     # Relay 1
+    pin:
+      number: GPIO4     # Relay 1
+      inverted: true
     name: "Heat"
     id: heat_sw
     icon: "mdi:fire"
@@ -254,7 +248,9 @@ switch:
           }
 
   - platform: gpio
-    pin: GPIO5     # Relay 2
+    pin:
+      number: GPIO5     # Relay 2
+      inverted: true
     name: "Cool"
     id: cool_sw
     icon: "mdi:snowflake"
@@ -271,7 +267,9 @@ switch:
           }
 
   - platform: gpio
-    pin: GPIO6     # Relay 3
+    pin:
+      number: GPIO6     # Relay 3
+      inverted: true
     name: "Fan"
     id: fan_sw
     icon: "mdi:fan"
@@ -285,7 +283,9 @@ switch:
           }
 
   - platform: gpio
-    pin: GPIO7     # Relay 4
+    pin:
+      number: GPIO7     # Relay 4
+      inverted: true
     name: "UV"
     id: uv_sw
     icon: "mdi:lightbulb-alert"
@@ -296,7 +296,9 @@ switch:
   # Energized (NO) = ESP32 controls furnace
 
   - platform: gpio
-    pin: GPIO15    # Relay 5 - W changeover
+    pin:
+      number: GPIO15    # Relay 5 - W changeover
+      inverted: true
     name: "Changeover W"
     id: changeover_w
     icon: "mdi:swap-horizontal"
@@ -304,7 +306,9 @@ switch:
     internal: true
 
   - platform: gpio
-    pin: GPIO16    # Relay 6 - Y changeover
+    pin:
+      number: GPIO16    # Relay 6 - Y changeover
+      inverted: true
     name: "Changeover Y"
     id: changeover_y
     icon: "mdi:swap-horizontal"
@@ -312,10 +316,22 @@ switch:
     internal: true
 
   - platform: gpio
-    pin: GPIO17    # Relay 7 - G changeover
+    pin:
+      number: GPIO17    # Relay 7 - G changeover
+      inverted: true
     name: "Changeover G"
     id: changeover_g
     icon: "mdi:swap-horizontal"
+    restore_mode: ALWAYS_OFF
+    internal: true
+
+  - platform: gpio
+    pin:
+      number: GPIO18
+      inverted: true
+    name: "Spare"
+    id: spare_sw
+    icon: "mdi:chip"
     restore_mode: ALWAYS_OFF
     internal: true
 
@@ -356,7 +372,6 @@ light:
     pin: GPIO48
     num_leds: 1
     rgb_order: GRB
-    rmt_channel: 0
     name: "Status LED"
     id: status_led
     internal: true
