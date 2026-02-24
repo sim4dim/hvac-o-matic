@@ -265,6 +265,16 @@ views:
         title: Zone Humidity
         hours_to_show: 24
         entities:
+          - entity: sensor.gw1000_humidity_ch4
+            name: Ben
+          - entity: sensor.gw1000_humidity_ch6
+            name: Gene
+          - entity: sensor.gw1000_humidity_ch7
+            name: Master BR
+          - entity: sensor.gw1000_indoor_humidity
+            name: 1st Floor
+          - entity: sensor.outdoor_humidity
+            name: Outdoor
           - entity: sensor.master_bathroom_temperature_humidity
             name: Master Bath
           - entity: sensor.office_temperature_sonoff_humidity
