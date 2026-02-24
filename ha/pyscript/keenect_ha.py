@@ -6,7 +6,7 @@ Controls Keen smart vents via Hubitat integration (Zigbee radios on Hubitat).
 HVAC furnace controlled directly via HTTP to Flask server (bypasses Hubitat).
 First floor servo register controlled via ESPHome native API (number entity).
 
-Version: 2.4.1
+Version: 2.5.0
 """
 
 import datetime as dt_mod
@@ -66,6 +66,23 @@ ZONES = {
     },
 }
 
+# Passive zones: temperature-only sensors, no vents or thermostats.
+# Tracked for drift analysis only — not part of active HVAC control.
+PASSIVE_ZONES = {
+    "master_bath": {
+        "temp_sensor": "sensor.master_bathroom_temperature_temperature",
+    },
+    "office": {
+        "temp_sensor": "sensor.office_temperature_sonoff_temperature",
+    },
+    "basement": {
+        "temp_sensor": "sensor.basement_sonoff_temperature",
+    },
+    "guest_bedroom": {
+        "temp_sensor": "sensor.guest_bedroom_sonoff_temperature",
+    },
+}
+
 # Default setpoints for restoring from away mode
 ZONE_DEFAULTS = {
     "ben": {"heat": 62, "cool": 76},
@@ -88,17 +105,15 @@ HVAC_COMMANDS = {
     7: "/FAN/off",    # fanOff
 }
 
-# MQTT mirror - publish relay state for test controller to shadow
-HVAC_MQTT_TOPIC = "hvac/mirror"
-# Maps button commands to relay states after the command
-HVAC_MQTT_MAP = {
-    1: {"heat": "OFF", "cool": "OFF", "fan": "OFF"},  # all off
-    2: {"heat": "ON"},     # heatOn
-    3: {"heat": "OFF"},    # heatOff
-    4: {"cool": "ON"},     # coolOn
-    5: {"cool": "OFF"},    # coolOff
-    6: {"fan": "ON"},      # fanOn
-    7: {"fan": "OFF"},     # fanOff
+# ESPHome controller mirror: button → switch service calls
+ESPHOME_MIRROR_MAP = {
+    1: [("turn_off", "switch.hvac_controller_heat"), ("turn_off", "switch.hvac_controller_cool"), ("turn_off", "switch.hvac_controller_fan")],
+    2: [("turn_on", "switch.hvac_controller_heat")],
+    3: [("turn_off", "switch.hvac_controller_heat")],
+    4: [("turn_on", "switch.hvac_controller_cool")],
+    5: [("turn_off", "switch.hvac_controller_cool")],
+    6: [("turn_on", "switch.hvac_controller_fan")],
+    7: [("turn_off", "switch.hvac_controller_fan")],
 }
 
 OUTDOOR_TEMP_ENTITY = "sensor.outdoor_temperature"
@@ -110,6 +125,13 @@ RETURN_TEMP_ENTITY = "sensor.hvac_controller_return_temperature"
 WARMUP_HEAT_DELTA = 15  # supply must be this much warmer than return (°F)
 WARMUP_COOL_DELTA = 10  # supply must be this much cooler than return (°F)
 WARMUP_FIXED_DELAY = 120  # fallback/max delay (seconds)
+
+# Safety: short-cycle protection and sensor failure thresholds
+SHORT_CYCLE_COOL_MIN = 300  # minimum seconds between cool off and next cool on
+SHORT_CYCLE_HEAT_MIN = 120  # minimum seconds between heat off and next heat on
+MIN_RUN_TIME = 180          # minimum seconds HVAC must run before turning off
+SENSOR_FAIL_ALERT = 3       # consecutive None readings before alert (~45s at 15s eval)
+SENSOR_FAIL_NEUTRAL = 10    # consecutive None readings before moving vents to neutral (~2.5min)
 
 # Setpoint change tracking — maps input_number to (zone, heat/cool)
 _SETPOINT_MAP = {
@@ -162,6 +184,15 @@ _st = {
     "cool_runtime": 0.0,        # cumulative cooling hours
     "cool_cost": 0.0,           # cumulative cooling cost ($)
     "warmup_start": None,       # timestamp when HVAC cycle started (for vent delay)
+    # Safety: push failure tracking
+    "push_fail_count": 0,
+    # Safety: per-zone consecutive sensor failure counts
+    "sensor_fail_count": {},
+    # Safety: short-cycle and min-run protection timestamps
+    "last_hvac_on_time": 0,
+    "last_hvac_off_time": 0,
+    # Warmup sensor health flag
+    "_warmup_sensors_ok": True,
 }
 
 
@@ -194,8 +225,22 @@ def _save_state():
         "vc": 1 if _st["vents_closed_after_off"] else 0,
         "sv": sv,
     }
+    # P7: Include cost tracking counters (heating/cooling runs and cycles)
+    cost_keys = {
+        "hr": round(_st.get("heat_runtime", 0), 4),
+        "hc": round(_st.get("heat_cost", 0), 2),
+        "cr": round(_st.get("cool_runtime", 0), 4),
+        "cc": round(_st.get("cool_cost", 0), 2),
+    }
+    data.update(cost_keys)
     try:
         val = json_mod.dumps(data, separators=(",", ":"))
+        # Safety: input_text has 255 char limit — drop cost keys if too long
+        if len(val) > 255:
+            log.warning(f"keenect: state JSON {len(val)} chars > 255, dropping cost keys")
+            for ck in ("hr", "hc", "cr", "cc"):
+                data.pop(ck, None)
+            val = json_mod.dumps(data, separators=(",", ":"))
         input_text.set_value(entity_id=STATE_ENTITY, value=val)
     except Exception as e:
         log.error(f"keenect: failed to save state: {e}")
@@ -232,6 +277,11 @@ def _load_state():
         # Restore number/servo vent levels (lights report their own state)
         for key, val in data.get("sv", {}).items():
             _st["vent_levels"][key] = val
+        # P7: Restore cost tracking counters
+        _st["heat_runtime"] = data.get("hr", 0.0)
+        _st["heat_cost"] = data.get("hc", 0.0)
+        _st["cool_runtime"] = data.get("cr", 0.0)
+        _st["cool_cost"] = data.get("cc", 0.0)
         _st["_last_persisted"] = _persist_snapshot()
         log.info(
             f"keenect: restored state - hvac_on={_st['hvac_on']} "
@@ -435,26 +485,58 @@ def _hvac_push(button):
                 log.info(f"keenect: HVAC GET {url} (retry {attempt} ok)")
             else:
                 log.info(f"keenect: HVAC GET {url}")
-            _hvac_mqtt_mirror(button)
+            _hvac_esphome_mirror(button)
+            _st["push_fail_count"] = 0
             return True
         except Exception as e:
             log.warning(f"keenect: HVAC {url} attempt {attempt+1} failed: {e}")
             if attempt < 2:
                 task.sleep(1)
     log.error(f"keenect: HVAC command {url} FAILED after 3 attempts")
+    _st["push_fail_count"] = _st.get("push_fail_count", 0) + 1
+    fc = _st["push_fail_count"]
+    if fc >= 5:
+        log.error(f"keenect: {fc} consecutive push failures, disabling keenect")
+        try:
+            persistent_notification.create(
+                title="Keenect: HVAC Push CRITICAL",
+                message=f"{fc} consecutive HVAC push commands failed. "
+                        f"Keenect has been disabled. Check Flask server at {HVAC_SERVER}.",
+                notification_id="keenect_push_fail",
+            )
+        except Exception:
+            pass
+        try:
+            input_boolean.turn_off(entity_id="input_boolean.keenect_enabled")
+        except Exception as e2:
+            log.error(f"keenect: failed to disable keenect: {e2}")
+    elif fc >= 3:
+        log.warning(f"keenect: {fc} consecutive push failures")
+        try:
+            persistent_notification.create(
+                title="Keenect: HVAC Push Failures",
+                message=f"{fc} consecutive HVAC push commands failed. "
+                        f"Check Flask server at {HVAC_SERVER}.",
+                notification_id="keenect_push_fail",
+            )
+        except Exception:
+            pass
     return False
 
 
-def _hvac_mqtt_mirror(button):
-    """Publish relay states to MQTT for test controller to shadow."""
-    states = HVAC_MQTT_MAP.get(button)
-    if not states:
+def _hvac_esphome_mirror(button):
+    """Send relay commands to ESPHome test controller via HA switches."""
+    actions = ESPHOME_MIRROR_MAP.get(button)
+    if not actions:
         return
-    try:
-        payload = json_mod.dumps(states)
-        mqtt.publish(topic=f"{HVAC_MQTT_TOPIC}/command", payload=payload, retain=True)
-    except Exception as e:
-        log.warning(f"keenect: MQTT mirror failed: {e}")
+    for action, entity in actions:
+        try:
+            if action == "turn_on":
+                switch.turn_on(entity_id=entity)
+            else:
+                switch.turn_off(entity_id=entity)
+        except Exception as e:
+            log.warning(f"keenect: ESPHome mirror {entity} failed: {e}")
 
 
 def _outdoor_temp():
@@ -467,6 +549,17 @@ def _hvac_turn_on():
     if mode == "OFF":
         log.info("keenect: HVAC mode OFF, ignoring on request")
         return
+
+    # Short-cycle protection: don't restart too soon after shutoff
+    off_elapsed = time_mod.time() - _st["last_hvac_off_time"]
+    sc_min = SHORT_CYCLE_COOL_MIN if mode == "COOL" else SHORT_CYCLE_HEAT_MIN
+    if _st["last_hvac_off_time"] > 0 and off_elapsed < sc_min:
+        log.warning(
+            f"keenect: short-cycle blocked - only {off_elapsed:.0f}s since last off "
+            f"(minimum {sc_min}s for {mode})"
+        )
+        return
+
     if mode == "COOL":
         ot = _outdoor_temp()
         lockout = _cool_lockout_temp()
@@ -486,40 +579,65 @@ def _hvac_turn_on():
     _st["vents_closed_after_off"] = True
 
     if mode == "HEAT":
-        _hvac_push(2)        # heatOn
-        _hvac_push(6)        # fanOn
+        ok1 = _hvac_push(2)        # heatOn
+        ok2 = _hvac_push(6)        # fanOn
+        if not ok1 or not ok2:
+            log.error("keenect: HVAC HEAT on push failed, not updating state")
+            return
         _st["main_state"] = "HEATING"
     elif mode == "COOL":
-        _hvac_push(4)        # coolOn
-        _hvac_push(6)        # fanOn
+        ok1 = _hvac_push(4)        # coolOn
+        ok2 = _hvac_push(6)        # fanOn
+        if not ok1 or not ok2:
+            log.error("keenect: HVAC COOL on push failed, not updating state")
+            return
         _st["main_state"] = "COOLING"
     else:
         return
     _st["hvac_on"] = True
+    _st["last_hvac_on_time"] = time_mod.time()
     _st["warmup_start"] = time_mod.time()
     log.info(f"keenect: HVAC ON in {mode} mode (warmup started)")
 
 
-def _hvac_turn_off():
-    """Shut down HVAC with proper sequence."""
-    log.info("keenect: HVAC shutdown")
+def _hvac_turn_off(emergency=False):
+    """Shut down HVAC with proper sequence.
+    emergency=True bypasses min-run check (used for sensor failure shutoff)."""
+    # Min-run protection: don't turn off too quickly after turning on
+    if not emergency and _st["last_hvac_on_time"] > 0:
+        run_elapsed = time_mod.time() - _st["last_hvac_on_time"]
+        mode = _hvac_mode()
+        if run_elapsed < MIN_RUN_TIME and mode != "OFF":
+            log.warning(
+                f"keenect: min-run blocked - only {run_elapsed:.0f}s of {MIN_RUN_TIME}s minimum"
+            )
+            return
+
+    log.info(f"keenect: HVAC shutdown{' (EMERGENCY)' if emergency else ''}")
     ms = _st["main_state"]
     if ms == "HEATING":
-        _hvac_push(3)   # heatOff
+        ok = _hvac_push(3)   # heatOff
     elif ms == "COOLING":
-        _hvac_push(5)   # coolOff
+        ok = _hvac_push(5)   # coolOff
     else:
-        _hvac_push(1)   # general off
+        ok = _hvac_push(1)   # general off
+
+    if not ok:
+        log.error("keenect: HVAC mode-off push failed, not changing state")
+        return
 
     if _st["recirc_active"] or _circ_enabled():
-        _hvac_push(6)   # keep fan
+        if not _hvac_push(6):   # keep fan
+            log.warning("keenect: fan-on push failed during shutdown (non-critical)")
         log.info("keenect: keeping fan on (recirc/circ)")
     else:
-        _hvac_push(7)   # fan off
+        if not _hvac_push(7):   # fan off
+            log.warning("keenect: fan-off push failed during shutdown (non-critical)")
 
     _st["main_state"] = "IDLE"
     _st["hvac_on"] = False
     _st["warmup_start"] = None
+    _st["last_hvac_off_time"] = time_mod.time()
 
     # Schedule delayed vent closure (checked in periodic eval)
     # Skip if recirculation or continuous circulation is active (vents should stay open)
@@ -557,6 +675,7 @@ def _is_warming_up():
     supply = _float(SUPPLY_TEMP_ENTITY)
     ret = _float(RETURN_TEMP_ENTITY)
     if supply is not None and ret is not None:
+        _st["_warmup_sensors_ok"] = True
         mode = _hvac_mode()
         if mode == "HEAT" and supply >= ret + WARMUP_HEAT_DELTA:
             _st["warmup_start"] = None
@@ -566,6 +685,14 @@ def _is_warming_up():
             _st["warmup_start"] = None
             log.info(f"keenect: warmup done - supply {supply:.1f}°F <= return {ret:.1f}°F - {WARMUP_COOL_DELTA} ({elapsed:.0f}s)")
             return False
+    else:
+        # P8: Warmup sensor staleness — log once when sensors go missing
+        if _st.get("_warmup_sensors_ok", True):
+            log.warning(
+                f"keenect: warmup sensors unavailable - supply={supply} return={ret}, "
+                f"falling back to {WARMUP_FIXED_DELAY}s timeout"
+            )
+            _st["_warmup_sensors_ok"] = False
 
     return True
 
@@ -904,10 +1031,56 @@ def _eval_master():
 
     # Pass 1: compute new zone states (no vent side effects)
     results = {}
+    none_zones = []
     for zn in ZONES:
         r = _eval_zone(zn)
         if r is not None:
             results[zn] = r
+            # Sensor OK — reset failure counter
+            _st["sensor_fail_count"][zn] = 0
+        else:
+            none_zones.append(zn)
+            fc = _st["sensor_fail_count"].get(zn, 0) + 1
+            _st["sensor_fail_count"][zn] = fc
+            if fc == SENSOR_FAIL_ALERT:
+                log.warning(f"keenect: sensor failure alert - {zn} returned None {fc} times")
+                try:
+                    persistent_notification.create(
+                        title=f"Keenect: Sensor Failure ({zn})",
+                        message=f"Temperature sensor for zone '{zn}' has returned None "
+                                f"{fc} consecutive times (~{fc * 15}s). Check sensor.",
+                        notification_id=f"keenect_sensor_fail_{zn}",
+                    )
+                except Exception:
+                    pass
+            if fc >= SENSOR_FAIL_NEUTRAL:
+                zone = ZONES[zn]
+                fan_vo = zone.get("fan_vo", 30)
+                log.warning(f"keenect: sensor dead - {zn} None {fc}x, moving vent to neutral ({fan_vo})")
+                _set_vent(zn, fan_vo)
+
+    # Emergency: ALL zones returning None while HVAC is on
+    if len(none_zones) == len(ZONES) and _st.get("hvac_on"):
+        log.error("keenect: EMERGENCY - ALL zone sensors returning None while HVAC on, forcing off")
+        # Direct push commands — bypass normal _hvac_turn_off checks
+        _hvac_push(3)   # heatOff
+        _hvac_push(5)   # coolOff
+        _hvac_push(7)   # fanOff
+        _st["main_state"] = "IDLE"
+        _st["hvac_on"] = False
+        _st["warmup_start"] = None
+        _st["last_hvac_off_time"] = time_mod.time()
+        try:
+            persistent_notification.create(
+                title="Keenect: EMERGENCY SHUTOFF",
+                message="ALL zone temperature sensors returned None simultaneously. "
+                        "HVAC has been force-shut-off. Check sensor connectivity immediately.",
+                notification_id="keenect_emergency_shutoff",
+            )
+        except Exception:
+            pass
+        _save_if_changed()
+        return
 
     # Pass 2: apply vent actions with complete picture (order-independent)
     _apply_zone_vents(results)
@@ -1042,6 +1215,7 @@ def _update_status():
             "recirc_active": _st["recirc_active"],
             "outdoor_temp": ot,
             "cool_lockout": ot is not None and ot < _cool_lockout_temp(),
+            "warmup_sensor_available": _st.get("_warmup_sensors_ok", True),
         })
     except Exception as e:
         log.warning(f"keenect: status update failed: {e}")
@@ -1176,6 +1350,7 @@ def _check_vent_health():
 @time_trigger("startup")
 def on_startup():
     """Restore persisted state and re-evaluate after HA restart."""
+    safety_synced = False
     try:
         _build_user_cache()
         _load_state()
@@ -1192,6 +1367,16 @@ def on_startup():
         _st["main_state"] = "IDLE"
         _st["warmup_start"] = None
         _st["vent_levels"] = {}  # force vent re-sends
+
+        # P6: Hardware safety sync FIRST — ensure furnace is off before anything else.
+        # This prevents the furnace from running uncontrolled during startup logic.
+        log.info("keenect: startup - hardware safety sync: ensuring furnace off")
+        _hvac_push(3)  # heatOff
+        _hvac_push(5)  # coolOff
+        if not _circ_enabled():
+            _hvac_push(7)  # fanOff
+        safety_synced = True
+
         if was_on:
             log.info("keenect: startup - was_on=True, will re-arm via eval")
         log.info(f"keenect: startup - restored zone_states={_st['zone_states']}")
@@ -1237,25 +1422,24 @@ def on_startup():
                     log.info(f"keenect: startup - {zn} away, setpoints → {away_heat}/{away_cool}")
                 else:
                     log.info(f"keenect: startup - {zn} away, setpoints already correct")
+
+        # P6: Zigbee delay — if system was active, wait 90s for Zigbee mesh to stabilize
+        # before sending vent commands. Keen vents take time to rejoin after HA restart.
+        if was_on:
+            log.info("keenect: startup - waiting 90s for Zigbee mesh (was_on=True)")
+            task.sleep(90)
+
         if _enabled():
             # _eval_master will: re-evaluate zones (with persisted state for hysteresis),
             # re-send vent commands (vent_levels cleared), and turn furnace on/off as needed.
             _eval_master()
-            # Hardware safety sync: after eval, if furnace should be off, ensure it IS off.
-            # Without this, a reload during an active heating cycle leaves the furnace
-            # running with hvac_on=False, and no code path ever sends the off command.
+            # Close all vents if IDLE after eval — if zones are IDLE→IDLE after restart,
+            # _apply_zone_vents won't fire any vent commands, leaving vents
+            # at whatever physical position they were in before restart.
             if not _st["hvac_on"] and not _st["recirc_active"]:
-                log.info("keenect: startup - hardware sync: ensuring furnace off")
-                _hvac_push(3)  # heatOff
-                _hvac_push(5)  # coolOff
-                if not _circ_enabled():
-                    _hvac_push(7)  # fanOff
-                    # Also close all vents — if zones are IDLE→IDLE after restart,
-                    # _apply_zone_vents won't fire any vent commands, leaving vents
-                    # at whatever physical position they were in before restart.
-                    if _all_idle():
-                        log.info("keenect: startup - all idle, closing all vents")
-                        _close_all_vents()
+                if not _circ_enabled() and _all_idle():
+                    log.info("keenect: startup - all idle, closing all vents")
+                    _close_all_vents()
             # If continuous circulation is active, open vents and fan
             # (state_trigger won't fire since boolean was already on before reload)
             if _circ_enabled():
@@ -1267,6 +1451,16 @@ def on_startup():
             _check_consistency()
     except Exception as e:
         log.error(f"keenect: on_startup crashed: {e}")
+    finally:
+        # If safety sync didn't complete, force everything off as last resort
+        if not safety_synced:
+            log.error("keenect: startup safety sync INCOMPLETE — forcing off")
+            try:
+                _hvac_push(3)  # heatOff
+                _hvac_push(5)  # coolOff
+                _hvac_push(7)  # fanOff
+            except Exception as e2:
+                log.error(f"keenect: startup finally block failed: {e2}")
 
 
 @time_trigger("period(now, 15s)")
@@ -1683,9 +1877,16 @@ def _learn_drift_rates():
         log.warning("keenect: drift analysis - no outdoor temp data")
         return {}
 
-    drift = {}
+    # Combine active zones and passive (sensor-only) zones for drift analysis
+    all_drift_zones = {}
     for zone_name, zone in ZONES.items():
-        entity_short = zone["temp_sensor"].replace("sensor.", "")
+        all_drift_zones[zone_name] = zone["temp_sensor"]
+    for zone_name, zone in PASSIVE_ZONES.items():
+        all_drift_zones[zone_name] = zone["temp_sensor"]
+
+    drift = {}
+    for zone_name, temp_sensor in all_drift_zones.items():
+        entity_short = temp_sensor.replace("sensor.", "")
         try:
             zone_temps = _influx_series(entity_short, days=ZONE_LEARN_DAYS, interval_min=30)
         except Exception:
@@ -1714,24 +1915,25 @@ def _learn_drift_rates():
             if diff > 5 and rate_per_hour < -0.1:
                 # Normalize: °F lost per hour per °F of indoor-outdoor difference
                 normalized = abs(rate_per_hour) / diff
-                if normalized < 0.15:  # Filter out HVAC-off events only (not huge drops)
+                if normalized < 0.08:  # Ceiling filter; p25 below picks natural drift
                     heat_loss_rates.append(normalized)
 
             # Heat gain: indoor rising, outdoor > indoor (summer drift)
             if diff < -5 and rate_per_hour > 0.1:
                 normalized = rate_per_hour / abs(diff)
-                if normalized < 0.15:
+                if normalized < 0.08:
                     heat_gain_rates.append(normalized)
 
         heat_loss_rates.sort()
         heat_gain_rates.sort()
 
-        loss_med = heat_loss_rates[len(heat_loss_rates) // 2] if heat_loss_rates else 0
-        gain_med = heat_gain_rates[len(heat_gain_rates) // 2] if heat_gain_rates else 0
+        # Use 25th percentile — natural drift is the slowest cooling rate
+        loss_p25 = heat_loss_rates[len(heat_loss_rates) // 4] if heat_loss_rates else 0
+        gain_p25 = heat_gain_rates[len(heat_gain_rates) // 4] if heat_gain_rates else 0
 
         drift[zone_name] = {
-            "heat_loss": round(loss_med * 1000, 1),  # milli-°F/h per °F delta (easier to read)
-            "heat_gain": round(gain_med * 1000, 1),
+            "heat_loss": round(loss_p25 * 1000, 1),  # milli-°F/h per °F delta (easier to read)
+            "heat_gain": round(gain_p25 * 1000, 1),
             "loss_samples": len(heat_loss_rates),
             "gain_samples": len(heat_gain_rates),
         }
@@ -1746,11 +1948,11 @@ def _update_drift_sensors(drift):
     OVERNIGHT_HOURS = 8
     outdoor = _outdoor_temp()
 
-    # Compute overnight drop for each zone
+    # Compute overnight drop for each zone (active + passive)
     drops = {}
     for z, d in drift.items():
         rate = d["heat_loss"] / 1000.0  # convert m°F/h/°F back to °F/h/°F
-        zone = ZONES.get(z)
+        zone = ZONES.get(z) or PASSIVE_ZONES.get(z)
         indoor = _float(zone["temp_sensor"]) if zone else None
         if indoor is not None and outdoor is not None and rate > 0:
             diff = abs(indoor - outdoor)
@@ -1916,3 +2118,18 @@ def check_anomalies():
             persistent_notification.dismiss(notification_id="keenect_anomaly")
     except Exception as e:
         log.error(f"keenect: check_anomalies crashed: {e}")
+
+
+@time_trigger("period(now, 60s)")
+def keenect_heartbeat():
+    """Publish MQTT heartbeat for ESPHome watchdog."""
+    import subprocess
+    try:
+        mqtt.publish(topic="keenect/heartbeat", payload="alive", qos=0)
+    except Exception:
+        try:
+            task.executor(subprocess.run,
+                          ["mosquitto_pub", "-h", "192.168.1.10", "-t", "keenect/heartbeat", "-m", "alive"],
+                          timeout=5)
+        except Exception as e:
+            log.warning(f"keenect: heartbeat publish failed: {e}")

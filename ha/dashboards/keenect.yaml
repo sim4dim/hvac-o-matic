@@ -147,6 +147,14 @@ views:
                 name: Master BR
               - entity: sensor.keenect_drift_first_floor
                 name: 1st Floor
+              - entity: sensor.keenect_drift_master_bath
+                name: Master Bath
+              - entity: sensor.keenect_drift_office
+                name: Office
+              - entity: sensor.keenect_drift_basement
+                name: Basement
+              - entity: sensor.keenect_drift_guest_bedroom
+                name: Guest Bedroom
           - entity: input_select.hvac_mode
             name: HVAC Mode
             tap_action:
@@ -244,6 +252,31 @@ views:
             name: 1st Floor
           - entity: sensor.outdoor_temperature
             name: Outdoor
+          - entity: sensor.master_bathroom_temperature_temperature
+            name: Master Bath
+          - entity: sensor.office_temperature_sonoff_temperature
+            name: Office
+          - entity: sensor.basement_sonoff_temperature
+            name: Basement
+          - entity: sensor.guest_bedroom_sonoff_temperature
+            name: Guest Bedroom
+
+      - type: history-graph
+        title: Zone Humidity
+        hours_to_show: 24
+        entities:
+          - entity: sensor.master_bathroom_temperature_humidity
+            name: Master Bath
+          - entity: sensor.office_temperature_sonoff_humidity
+            name: Office
+          - entity: sensor.basement_sonoff_humidity
+            name: Basement
+          - entity: sensor.guest_bedroom_sonoff_humidity
+            name: Guest Bedroom
+          - entity: sensor.hvac_controller_supply_humidity
+            name: Supply Duct
+          - entity: sensor.hvac_controller_return_humidity
+            name: Return Duct
 
       - type: history-graph
         title: Vent Positions
@@ -275,33 +308,3 @@ views:
             name: Cool Hours
           - entity: sensor.hvac_cool_cost_daily
             name: Cool Cost ($)
-
-  - title: Mirror Test
-    path: mirror-test
-    icon: mdi:swap-horizontal
-    cards:
-      - type: entities
-        title: ESPHome Mirror Comparison
-        show_header_toggle: false
-        entities:
-          - entity: binary_sensor.hvac_mirror_match
-            name: Mirror Match
-          - entity: sensor.flask_hvac_command
-            name: Flask HVAC Command
-          - entity: sensor.esphome_hvac_state
-            name: ESPHome HVAC State
-          - entity: switch.hvac_controller_mirror_mode
-            name: Mirror Mode
-          - entity: switch.hvac_controller_bypass
-            name: Bypass (ESPHome Direct Control)
-
-      - type: history-graph
-        title: Mirror Match History
-        hours_to_show: 24
-        entities:
-          - entity: binary_sensor.hvac_mirror_match
-            name: Match
-          - entity: sensor.flask_hvac_command
-            name: Flask Command
-          - entity: sensor.esphome_hvac_state
-            name: ESPHome State
