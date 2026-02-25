@@ -91,7 +91,7 @@ esphome:
 # OTHER CONNECTIONS
 # ---------------------------------------------------------------------------
 #
-#  GPIO11 - Bypass button (INPUT_PULLUP, press to toggle bypass)
+#  GPIO11 - Bypass toggle switch (INPUT_PULLUP, position tracks bypass state)
 #  GPIO10 - Warning LED (on during bypass)
 #  GPIO8  - I2C SDA (BME280, BME680, SSD1306)
 #  GPIO9  - I2C SCL
@@ -122,6 +122,7 @@ logger:
 
 api:
   id: ha_api
+  reboot_timeout: 15min
   encryption:
     key: !secret hvac_api_key
   on_client_connected:
@@ -131,12 +132,12 @@ api:
     - globals.set:
         id: watchdog_tripped
         value: "false"
-    # HA connected - exit bypass unless mirror mode
+    # HA connected - exit bypass (unless physical toggle overrides)
     - lambda: |-
-        if (!id(mirror_mode)) {
+        if (!id(toggle_bypass)) {
           id(bypass_sw).turn_off();
         } else {
-          ESP_LOGI("mirror", "Mirror mode active - keeping bypass ON");
+          ESP_LOGI("bypass", "API reconnected but physical toggle is in bypass - staying");
         }
   on_client_disconnected:
     - logger.log: "API client disconnected - watchdog timer active"
@@ -148,34 +149,6 @@ ota:
 web_server:
   port: 80
   version: 3
-
-mqtt:
-  id: mqtt_client
-  broker: 192.168.1.10
-  port: 1883
-  on_message:
-    - topic: hvac/mirror/command
-      then:
-        - lambda: |-
-            if (!id(mirror_mode)) return;
-            std::string p = x;
-            ESP_LOGI("mirror", "Received: %s", p.c_str());
-
-            auto has_key_val = [&](const char* key, const char* val) -> bool {
-              std::string search = std::string("\"") + key + "\": \"" + val + "\"";
-              if (p.find(search) != std::string::npos) return true;
-              // Try without space after colon
-              search = std::string("\"") + key + "\":\"" + val + "\"";
-              return p.find(search) != std::string::npos;
-            };
-
-            if (has_key_val("heat", "ON")) id(heat_sw).turn_on();
-            else if (has_key_val("heat", "OFF")) id(heat_sw).turn_off();
-
-            if (has_key_val("cool", "ON")) id(cool_sw).turn_on();
-            else if (has_key_val("cool", "OFF")) id(cool_sw).turn_off();
-
-            // fan is auto-managed by heat/cool on_turn_on/off - ignore standalone fan commands
 
 # ---------------------------------------------------------------------------
 # Globals for watchdog and display state
@@ -193,10 +166,41 @@ globals:
     type: uint8_t
     restore_value: false
     initial_value: "0"
-  - id: mirror_mode
+  - id: toggle_bypass
     type: bool
-    restore_value: true
-    initial_value: "true"
+    restore_value: false
+    initial_value: "false"
+  - id: heat_on_since
+    type: uint32_t
+    restore_value: false
+    initial_value: "0"
+  - id: cool_on_since
+    type: uint32_t
+    restore_value: false
+    initial_value: "0"
+  - id: heat_last_off
+    type: uint32_t
+    restore_value: false
+    initial_value: "0"
+  - id: cool_last_off
+    type: uint32_t
+    restore_value: false
+    initial_value: "0"
+  - id: last_heartbeat
+    type: uint32_t
+    restore_value: false
+    initial_value: "0"
+
+# ---------------------------------------------------------------------------
+# MQTT - heartbeat subscriber for keenect watchdog
+# ---------------------------------------------------------------------------
+mqtt:
+  broker: 192.168.1.10
+  discovery: false
+  on_message:
+    - topic: keenect/heartbeat
+      then:
+        - lambda: 'id(last_heartbeat) = millis();'
 
 # ---------------------------------------------------------------------------
 # Watchdog: enter bypass after 60 min with no API connection
@@ -231,6 +235,56 @@ interval:
           } else if (heap_kb < 60.0) {
             ESP_LOGW("memory", "Low heap: %.1f kB", heap_kb);
           }
+  # Safety checks
+  - interval: 30s
+    then:
+      - lambda: |-
+          uint32_t now = millis();
+
+          // --- Max-run timer: heat (2 hours) ---
+          if (id(heat_on_since) > 0 && now - id(heat_on_since) > 7200000) {
+            ESP_LOGE("safety", "Heat max-run exceeded (2h) - forcing off + bypass");
+            id(heat_sw).turn_off();
+            id(bypass_sw).turn_on();
+          }
+
+          // --- Max-run timer: cool (2 hours) ---
+          if (id(cool_on_since) > 0 && now - id(cool_on_since) > 7200000) {
+            ESP_LOGE("safety", "Cool max-run exceeded (2h) - forcing off + bypass");
+            id(cool_sw).turn_off();
+            id(bypass_sw).turn_on();
+          }
+
+          // --- Supply temp high limit (160F) ---
+          if (id(heat_on_since) > 0 && id(supply_temp).has_state() && id(supply_temp).state > 160.0) {
+            ESP_LOGE("safety", "Supply temp > 160F - heat exchanger limit exceeded");
+            id(heat_sw).turn_off();
+            id(bypass_sw).turn_on();
+          }
+
+          // --- Supply temp low warning (< 80F after 10 min heating) ---
+          if (id(heat_on_since) > 0 && now - id(heat_on_since) > 600000
+              && id(supply_temp).has_state() && id(supply_temp).state < 80.0) {
+            ESP_LOGW("safety", "Supply temp < 80F after 10min - possible igniter failure");
+          }
+
+          // --- Overpressure check (delta > 10 hPa) ---
+          if ((id(heat_on_since) > 0 || id(cool_on_since) > 0)
+              && id(pressure_delta).has_state()
+              && fabs(id(pressure_delta).state) > 10.0) {
+            ESP_LOGE("safety", "Overpressure detected (dP=%.1f hPa) - forcing off + bypass",
+                     id(pressure_delta).state);
+            id(heat_sw).turn_off();
+            id(cool_sw).turn_off();
+            id(bypass_sw).turn_on();
+          }
+
+          // --- Keenect heartbeat watchdog (5 min) ---
+          if (id(last_heartbeat) > 0 && now - id(last_heartbeat) > 300000) {
+            ESP_LOGW("safety", "No keenect heartbeat for 5min - activating bypass");
+            id(bypass_sw).turn_on();
+          }
+
   # Display page toggle
   - interval: 5s
     then:
@@ -257,29 +311,6 @@ interval:
           auto out = (esphome::light::AddressableLight *)led->get_output();
           out->get(0) = Color(r, g, b);
           out->schedule_show();
-  # Mirror mode: publish ESPHome relay state for comparison
-  - interval: 30s
-    then:
-      - lambda: |-
-          if (!id(mirror_mode)) return;
-          char buf[128];
-          snprintf(buf, sizeof(buf),
-            "{\"heat\":\"%s\",\"cool\":\"%s\",\"fan\":\"%s\",\"bypass\":\"%s\"}",
-            id(heat_sw).state ? "ON" : "OFF",
-            id(cool_sw).state ? "ON" : "OFF",
-            id(fan_sw).state ? "ON" : "OFF",
-            id(bypass_sw).state ? "ON" : "OFF");
-          id(mqtt_client).publish("hvac/mirror/esphome", std::string(buf), 0, true);
-  # MQTT memory reporting
-  - interval: 60s
-    then:
-      - lambda: |-
-          char buf[96];
-          snprintf(buf, sizeof(buf),
-            "{\"heap_kb\":%.1f,\"psram_kb\":%.0f}",
-            heap_caps_get_free_size(MALLOC_CAP_8BIT) / 1024.0,
-            heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024.0);
-          id(mqtt_client).publish("hvac/memory", std::string(buf), 0, false);
 
 # ---------------------------------------------------------------------------
 # I2C bus - shared by BME280, BME680, SSD1306
@@ -308,10 +339,19 @@ switch:
     interlock: [heat_sw, cool_sw]
     interlock_wait_time: 500ms
     on_turn_on:
+      - lambda: |-
+          if (id(heat_last_off) > 0 && millis() - id(heat_last_off) < 120000) {
+            ESP_LOGW("safety", "Short-cycle protection: heat blocked (< 120s since last off)");
+            id(heat_sw).turn_off();
+            return;
+          }
+          id(heat_on_since) = millis();
       - switch.turn_on: fan_sw
       - switch.turn_on: uv_sw
     on_turn_off:
       - lambda: |-
+          id(heat_on_since) = 0;
+          id(heat_last_off) = millis();
           if (!id(cool_sw).state) {
             id(fan_sw).turn_off();
             id(uv_sw).turn_off();
@@ -328,10 +368,19 @@ switch:
     interlock: [heat_sw, cool_sw]
     interlock_wait_time: 500ms
     on_turn_on:
+      - lambda: |-
+          if (id(cool_last_off) > 0 && millis() - id(cool_last_off) < 300000) {
+            ESP_LOGW("safety", "Short-cycle protection: cool blocked (< 300s since last off)");
+            id(cool_sw).turn_off();
+            return;
+          }
+          id(cool_on_since) = millis();
       - switch.turn_on: fan_sw
       - switch.turn_on: uv_sw
     on_turn_off:
       - lambda: |-
+          id(cool_on_since) = 0;
+          id(cool_last_off) = millis();
           if (!id(heat_sw).state) {
             id(fan_sw).turn_off();
             id(uv_sw).turn_off();
@@ -406,7 +455,7 @@ switch:
     id: bypass_sw
     icon: "mdi:gate-open"
     restore_mode: ALWAYS_OFF
-    optimistic: true
+    optimistic: false
     turn_on_action:
       # Enter bypass: kill ESP32 control, de-energize changeover -> Pearl
       - switch.turn_off: heat_sw
@@ -417,31 +466,21 @@ switch:
       - switch.turn_off: changeover_y
       - switch.turn_off: changeover_g
       - output.turn_on: warning_led
+      - lambda: "id(bypass_sw).publish_state(true);"
     turn_off_action:
-      # Exit bypass: energize changeover -> ESP32 in control
-      - switch.turn_on: changeover_w
-      - switch.turn_on: changeover_y
-      - switch.turn_on: changeover_g
-      - output.turn_off: warning_led
-
-  - platform: template
-    name: "Mirror Mode"
-    id: mirror_sw
-    icon: "mdi:content-copy"
-    optimistic: true
-    restore_mode: RESTORE_DEFAULT_ON
-    turn_on_action:
-      - globals.set:
-          id: mirror_mode
-          value: "true"
-      - logger.log: "Mirror mode enabled - shadowing Flask controller"
-      # Force bypass ON (changeover relays off, Pearl controls furnace)
-      - switch.turn_on: bypass_sw
-    turn_off_action:
-      - globals.set:
-          id: mirror_mode
-          value: "false"
-      - logger.log: "Mirror mode disabled - normal operation"
+      - if:
+          condition:
+            lambda: "return id(toggle_bypass);"
+          then:
+            - lambda: 'ESP_LOGW("bypass", "Cannot exit bypass - physical toggle overrides");'
+          else:
+            - switch.turn_on: changeover_w
+            - delay: 200ms
+            - switch.turn_on: changeover_y
+            - delay: 200ms
+            - switch.turn_on: changeover_g
+            - output.turn_off: warning_led
+            - lambda: "id(bypass_sw).publish_state(false);"
 
   - platform: restart
     name: "Restart"
@@ -468,7 +507,7 @@ output:
     id: warning_led
 
 # ---------------------------------------------------------------------------
-# Bypass button (GPIO0)
+# Bypass toggle switch (GPIO11)
 # ---------------------------------------------------------------------------
 binary_sensor:
   - platform: gpio
@@ -476,14 +515,24 @@ binary_sensor:
       number: GPIO11
       mode: INPUT_PULLUP
       inverted: true
-    name: "Bypass Button"
-    icon: "mdi:button-pointer"
+    name: "Bypass Toggle"
+    id: bypass_toggle
+    icon: "mdi:toggle-switch"
+    device_class: safety
     filters:
       - delayed_on: 50ms
       - delayed_off: 50ms
-    on_press:
+    on_state:
       then:
-        - switch.toggle: bypass_sw
+        - lambda: |-
+            id(toggle_bypass) = x;
+            if (x) {
+              id(bypass_sw).turn_on();
+            } else {
+              if (!id(watchdog_tripped)) {
+                id(bypass_sw).turn_off();
+              }
+            }
 
   - platform: status
     name: "Status"
@@ -540,6 +589,20 @@ sensor:
       return {};
     update_interval: 30s
 
+  # Computed: temperature delta (supply - return)
+  - platform: template
+    name: "Temperature Delta"
+    id: temp_delta
+    unit_of_measurement: "°F"
+    icon: "mdi:thermometer-lines"
+    accuracy_decimals: 1
+    lambda: |-
+      if (id(supply_temp).has_state() && id(return_temp).has_state()) {
+        return id(supply_temp).state - id(return_temp).state;
+      }
+      return {};
+    update_interval: 30s
+
   # Diagnostics
   - platform: wifi_signal
     name: "WiFi Signal"
@@ -585,48 +648,54 @@ display:
       if (id(display_page) == 0) {
         // Status screen
         it.printf(0, 0, id(font1), "HVAC Controller");
-        it.printf(0, 14, id(font1), "HEAT:%s COOL:%s",
+        it.printf(0, 13, id(font1), "H:%s  C:%s",
           id(heat_sw).state ? "ON" : "--",
           id(cool_sw).state ? "ON" : "--");
-        it.printf(0, 28, id(font1), "FAN:%s  UV:%s",
+        it.printf(0, 26, id(font1), "F:%s  UV:%s",
           id(fan_sw).state ? "ON" : "--",
           id(uv_sw).state ? "ON" : "--");
         if (id(bypass_sw).state) {
-          it.printf(0, 42, id(font1), "** BYPASS **");
+          if (id(toggle_bypass)) {
+            it.printf(0, 39, id(font1), "* BYPASS (SW) *");
+          } else if (id(watchdog_tripped)) {
+            it.printf(0, 39, id(font1), "* BYPASS (WD) *");
+          } else {
+            it.printf(0, 39, id(font1), "** BYPASS **");
+          }
         } else {
-          it.printf(0, 42, id(font1), "Bypass: OFF");
+          it.printf(0, 39, id(font1), "Bypass: OFF");
         }
         float heap_kb = heap_caps_get_free_size(MALLOC_CAP_8BIT) / 1024.0;
         if (heap_kb < 60.0) {
-          it.printf(0, 54, id(font1), "!! Heap: %.0f kB !!", heap_kb);
+          it.printf(0, 52, id(font1), "!Heap:%.0fkB!", heap_kb);
         } else {
-          it.printf(0, 54, id(font1), "Heap: %.0f kB", heap_kb);
+          it.printf(0, 52, id(font1), "Heap: %.0f kB", heap_kb);
         }
       } else {
         // Sensor screen
         if (id(supply_temp).has_state()) {
-          it.printf(0, 0, id(font1), "Sup: %.1fF %.0f%%",
-            id(supply_temp).state, id(supply_hum).state);
+          it.printf(0, 0, id(font1), "S:%.1fF %d%%",
+            id(supply_temp).state, (int)id(supply_hum).state);
         } else {
-          it.printf(0, 0, id(font1), "Sup: --");
+          it.printf(0, 0, id(font1), "S:--");
         }
         if (id(return_temp).has_state()) {
-          it.printf(0, 14, id(font1), "Ret: %.1fF %.0f%%",
-            id(return_temp).state, id(return_hum).state);
+          it.printf(0, 13, id(font1), "R:%.1fF %d%%",
+            id(return_temp).state, (int)id(return_hum).state);
         } else {
-          it.printf(0, 14, id(font1), "Ret: --");
+          it.printf(0, 13, id(font1), "R:--");
         }
         if (id(pressure_delta).has_state()) {
-          it.printf(0, 28, id(font1), "dP: %.1f hPa", id(pressure_delta).state);
+          it.printf(0, 26, id(font1), "dP: %.1f hPa", id(pressure_delta).state);
         }
         if (id(supply_temp).has_state() && id(return_temp).has_state()) {
           float dt = id(supply_temp).state - id(return_temp).state;
-          it.printf(0, 42, id(font1), "dT: %+.1fF", dt);
+          it.printf(0, 39, id(font1), "dT: %+.1fF", dt);
         }
         if (id(return_voc).has_state()) {
           auto voc = id(return_voc).state;
           const char *label = voc > 200 ? "Good" : voc > 50 ? "Mod" : "Poor";
-          it.printf(0, 54, id(font1), "VOC: %s (%.0f)", label, voc);
+          it.printf(0, 52, id(font1), "VOC:%s(%.0f)", label, voc);
         }
       }
 
