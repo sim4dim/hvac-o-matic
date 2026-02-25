@@ -1896,6 +1896,17 @@ def _learn_drift_rates():
 
         # Use the shorter list length
         n = min(len(zone_temps), len(outdoor_temps))
+
+        # Detect sensor resolution to scale ceiling filter
+        # Low-res sensors (~1°F steps) produce higher normalized rates
+        deltas = [abs(zone_temps[i] - zone_temps[i - 1])
+                  for i in range(1, len(zone_temps))
+                  if abs(zone_temps[i] - zone_temps[i - 1]) > 0.01]
+        min_step = min(deltas) if deltas else 0.1
+        # Base ceiling 0.08 for fine sensors (<=0.2°F step), scale up for coarse
+        ceiling = max(0.08, 0.08 * (min_step / 0.2)) if min_step > 0.2 else 0.08
+        ceiling = min(ceiling, 0.30)  # hard cap
+
         heat_loss_rates = []  # °F/h per °F delta (winter: indoor dropping toward outdoor)
         heat_gain_rates = []  # °F/h per °F delta (summer: indoor rising toward outdoor)
 
@@ -1915,13 +1926,13 @@ def _learn_drift_rates():
             if diff > 5 and rate_per_hour < -0.1:
                 # Normalize: °F lost per hour per °F of indoor-outdoor difference
                 normalized = abs(rate_per_hour) / diff
-                if normalized < 0.08:  # Ceiling filter; p25 below picks natural drift
+                if normalized < ceiling:
                     heat_loss_rates.append(normalized)
 
             # Heat gain: indoor rising, outdoor > indoor (summer drift)
             if diff < -5 and rate_per_hour > 0.1:
                 normalized = rate_per_hour / abs(diff)
-                if normalized < 0.08:
+                if normalized < ceiling:
                     heat_gain_rates.append(normalized)
 
         heat_loss_rates.sort()
