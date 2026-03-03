@@ -1897,40 +1897,52 @@ def _learn_drift_rates():
         # Use the shorter list length
         n = min(len(zone_temps), len(outdoor_temps))
 
-        # Detect sensor resolution to scale ceiling filter
-        # Low-res sensors (~1°F steps) produce higher normalized rates
+        # Detect sensor resolution from minimum observed step
         deltas = [abs(zone_temps[i] - zone_temps[i - 1])
                   for i in range(1, len(zone_temps))
                   if abs(zone_temps[i] - zone_temps[i - 1]) > 0.01]
         min_step = min(deltas) if deltas else 0.1
-        # Base ceiling 0.08 for fine sensors (<=0.2°F step), scale up for coarse
-        ceiling = max(0.08, 0.08 * (min_step / 0.2)) if min_step > 0.2 else 0.08
-        ceiling = min(ceiling, 0.30)  # hard cap
+
+        # Sliding window: coarse sensors (Sonoff ~1°F steps) need wider windows
+        # to average out quantization artifacts. Fine sensors use single interval.
+        if min_step > 0.3:
+            window = min(int(min_step / 0.2) + 1, 12)  # cap at 6 hours
+        else:
+            window = 1
+        window_hours = window * 0.5  # each interval is 30 min
+
+        # Fixed ceiling — windowing handles coarse-sensor inflation
+        ceiling = 0.08
 
         heat_loss_rates = []  # °F/h per °F delta (winter: indoor dropping toward outdoor)
         heat_gain_rates = []  # °F/h per °F delta (summer: indoor rising toward outdoor)
 
-        for i in range(1, n):
-            indoor = zone_temps[i - 1]
+        for i in range(window, n):
+            indoor = zone_temps[i - window]
             indoor_next = zone_temps[i]
-            outdoor = outdoor_temps[i - 1]
             delta_indoor = indoor_next - indoor  # negative = cooling
+
+            # Average outdoor temp over the window for stable normalization
+            outdoor_sum = 0.0
+            for j in range(i - window, i):
+                outdoor_sum = outdoor_sum + outdoor_temps[j]
+            outdoor = outdoor_sum / window
+
             diff = indoor - outdoor  # positive in winter (indoor warmer)
 
             if abs(diff) < 5:
                 continue  # Not enough temp difference to measure drift
 
-            rate_per_hour = delta_indoor * 2  # 30-min → hourly
+            rate_per_hour = delta_indoor / window_hours
 
             # Heat loss: indoor dropping, indoor > outdoor (winter drift)
-            if diff > 5 and rate_per_hour < -0.1:
-                # Normalize: °F lost per hour per °F of indoor-outdoor difference
+            if diff > 5 and rate_per_hour < -0.05:
                 normalized = abs(rate_per_hour) / diff
                 if normalized < ceiling:
                     heat_loss_rates.append(normalized)
 
             # Heat gain: indoor rising, outdoor > indoor (summer drift)
-            if diff < -5 and rate_per_hour > 0.1:
+            if diff < -5 and rate_per_hour > 0.05:
                 normalized = rate_per_hour / abs(diff)
                 if normalized < ceiling:
                     heat_gain_rates.append(normalized)
@@ -1947,6 +1959,8 @@ def _learn_drift_rates():
             "heat_gain": round(gain_p25 * 1000, 1),
             "loss_samples": len(heat_loss_rates),
             "gain_samples": len(heat_gain_rates),
+            "sensor_step": round(min_step, 2),
+            "window_intervals": window,
         }
 
     return drift
@@ -1997,6 +2011,8 @@ def _update_drift_sensors(drift):
             "overnight_drop": drop,
             "heat_loss_rate": d["heat_loss"],
             "heat_gain_rate": d["heat_gain"],
+            "sensor_step": d.get("sensor_step", 0),
+            "window_intervals": d.get("window_intervals", 1),
         })
 
     state.set("sensor.keenect_drift", f"{len(drift)} zones", {
