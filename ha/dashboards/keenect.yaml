@@ -331,6 +331,14 @@ views:
         entities:
           - entity: input_button.keenect_apply_config
             name: Apply Config Changes
+          - type: button
+            name: Reload Pyscript
+            icon: mdi:restart
+            tap_action:
+              action: call-service
+              service: pyscript.reload
+              confirmation:
+                text: "Reload pyscript? Needed after changing sensor/thermostat entities."
 
       # Zone enable/disable toggles (always visible)
       - type: entities
