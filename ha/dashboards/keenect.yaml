@@ -634,7 +634,7 @@ views:
             name: Gas $/therm
           - entity: input_number.ac_wattage
             name: AC Wattage
-          - entity: input_number.electric_price_per_kwh
+          - entity: sensor.current_electric_rate
             name: Electric $/kWh
 
       # Add zone guidance

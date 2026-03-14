@@ -1224,7 +1224,7 @@ def _track_cost():
         _st["heat_cost"] += cost
     elif mode == "COOL":
         ac_kw = _float("input_number.ac_wattage", 3500) / 1000.0
-        price = _float("input_number.electric_price_per_kwh", 0.19)
+        price = _float("sensor.current_electric_rate", 0.20)
         cost = ac_kw * elapsed_h * price
         _st["cool_runtime"] += elapsed_h
         _st["cool_cost"] += cost
