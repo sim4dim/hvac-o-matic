@@ -1,0 +1,620 @@
+# keenect_zones.yaml
+# Home Assistant package: GUI-based keenect zone configuration helpers
+# 4 active zone slots (zone_1 through zone_4)
+# 4 passive zone slots (passive_1 through passive_4)
+# input_select options are populated by pyscript on startup
+
+input_boolean:
+
+  # --- Active Zone Enabled ---
+  keenect_zone_1_enabled:
+    name: "Zone 1 Enabled"
+    icon: mdi:check-circle
+    initial: true
+
+  keenect_zone_2_enabled:
+    name: "Zone 2 Enabled"
+    icon: mdi:check-circle
+    initial: true
+
+  keenect_zone_3_enabled:
+    name: "Zone 3 Enabled"
+    icon: mdi:check-circle
+    initial: true
+
+  keenect_zone_4_enabled:
+    name: "Zone 4 Enabled"
+    icon: mdi:check-circle
+    initial: true
+
+  # --- Passive Zone Enabled ---
+  keenect_passive_1_enabled:
+    name: "Passive Zone 1 Enabled"
+    icon: mdi:check-circle
+    initial: true
+
+  keenect_passive_2_enabled:
+    name: "Passive Zone 2 Enabled"
+    icon: mdi:check-circle
+    initial: true
+
+  keenect_passive_3_enabled:
+    name: "Passive Zone 3 Enabled"
+    icon: mdi:check-circle
+    initial: true
+
+  keenect_passive_4_enabled:
+    name: "Passive Zone 4 Enabled"
+    icon: mdi:check-circle
+    initial: true
+
+input_button:
+  keenect_apply_config:
+    name: "Apply Keenect Config"
+    icon: mdi:check-all
+
+
+input_text:
+
+  # --- Active Zone Names ---
+  keenect_zone_1_name:
+    name: "Zone 1 Name"
+    max: 40
+    icon: mdi:label
+    initial: "ben"
+
+  keenect_zone_2_name:
+    name: "Zone 2 Name"
+    max: 40
+    icon: mdi:label
+    initial: "gene"
+
+  keenect_zone_3_name:
+    name: "Zone 3 Name"
+    max: 40
+    icon: mdi:label
+    initial: "mbr"
+
+  keenect_zone_4_name:
+    name: "Zone 4 Name"
+    max: 40
+    icon: mdi:label
+    initial: "first_floor"
+
+  # --- Passive Zone Names ---
+  keenect_passive_1_name:
+    name: "Passive Zone 1 Name"
+    max: 40
+    icon: mdi:label
+    initial: "master_bath"
+
+  keenect_passive_2_name:
+    name: "Passive Zone 2 Name"
+    max: 40
+    icon: mdi:label
+    initial: "office"
+
+  keenect_passive_3_name:
+    name: "Passive Zone 3 Name"
+    max: 40
+    icon: mdi:label
+    initial: "basement"
+
+  keenect_passive_4_name:
+    name: "Passive Zone 4 Name"
+    max: 40
+    icon: mdi:label
+    initial: "guest_bedroom"
+
+  # --- Persistence (hidden backing store for input_select survival across restarts) ---
+  keenect_zone_1_persist:
+    name: "Zone 1 Config Persist"
+    max: 255
+    icon: mdi:content-save
+  keenect_zone_2_persist:
+    name: "Zone 2 Config Persist"
+    max: 255
+    icon: mdi:content-save
+  keenect_zone_3_persist:
+    name: "Zone 3 Config Persist"
+    max: 255
+    icon: mdi:content-save
+  keenect_zone_4_persist:
+    name: "Zone 4 Config Persist"
+    max: 255
+    icon: mdi:content-save
+  keenect_passive_1_persist:
+    name: "Passive 1 Config Persist"
+    max: 255
+    icon: mdi:content-save
+  keenect_passive_2_persist:
+    name: "Passive 2 Config Persist"
+    max: 255
+    icon: mdi:content-save
+  keenect_passive_3_persist:
+    name: "Passive 3 Config Persist"
+    max: 255
+    icon: mdi:content-save
+  keenect_passive_4_persist:
+    name: "Passive 4 Config Persist"
+    max: 255
+    icon: mdi:content-save
+
+
+input_select:
+
+  # --- Zone 1 (ben) ---
+  keenect_zone_1_temp_sensor:
+    name: "Zone 1 Temp Sensor"
+    options:
+      - "(none)"
+    icon: mdi:thermometer
+
+  keenect_zone_1_thermostat:
+    name: "Zone 1 Thermostat"
+    options:
+      - "(none)"
+    icon: mdi:thermostat
+
+  keenect_zone_1_vent_1:
+    name: "Zone 1 Vent 1"
+    options:
+      - "(none)"
+    icon: mdi:air-filter
+
+  keenect_zone_1_vent_2:
+    name: "Zone 1 Vent 2"
+    options:
+      - "(none)"
+    icon: mdi:air-filter
+
+  keenect_zone_1_vent_type:
+    name: "Zone 1 Vent Type"
+    options:
+      - light
+      - number
+    icon: mdi:format-list-bulleted
+    initial: light
+
+  keenect_zone_1_vent_control:
+    name: "Zone 1 Vent Control"
+    options:
+      - Aggressive
+      - Proportional
+    icon: mdi:tune
+    initial: Aggressive
+
+  # --- Zone 2 (gene) ---
+  keenect_zone_2_temp_sensor:
+    name: "Zone 2 Temp Sensor"
+    options:
+      - "(none)"
+    icon: mdi:thermometer
+
+  keenect_zone_2_thermostat:
+    name: "Zone 2 Thermostat"
+    options:
+      - "(none)"
+    icon: mdi:thermostat
+
+  keenect_zone_2_vent_1:
+    name: "Zone 2 Vent 1"
+    options:
+      - "(none)"
+    icon: mdi:air-filter
+
+  keenect_zone_2_vent_2:
+    name: "Zone 2 Vent 2"
+    options:
+      - "(none)"
+    icon: mdi:air-filter
+
+  keenect_zone_2_vent_type:
+    name: "Zone 2 Vent Type"
+    options:
+      - light
+      - number
+    icon: mdi:format-list-bulleted
+    initial: light
+
+  keenect_zone_2_vent_control:
+    name: "Zone 2 Vent Control"
+    options:
+      - Aggressive
+      - Proportional
+    icon: mdi:tune
+    initial: Aggressive
+
+  # --- Zone 3 (mbr) ---
+  keenect_zone_3_temp_sensor:
+    name: "Zone 3 Temp Sensor"
+    options:
+      - "(none)"
+    icon: mdi:thermometer
+
+  keenect_zone_3_thermostat:
+    name: "Zone 3 Thermostat"
+    options:
+      - "(none)"
+    icon: mdi:thermostat
+
+  keenect_zone_3_vent_1:
+    name: "Zone 3 Vent 1"
+    options:
+      - "(none)"
+    icon: mdi:air-filter
+
+  keenect_zone_3_vent_2:
+    name: "Zone 3 Vent 2"
+    options:
+      - "(none)"
+    icon: mdi:air-filter
+
+  keenect_zone_3_vent_type:
+    name: "Zone 3 Vent Type"
+    options:
+      - light
+      - number
+    icon: mdi:format-list-bulleted
+    initial: light
+
+  keenect_zone_3_vent_control:
+    name: "Zone 3 Vent Control"
+    options:
+      - Aggressive
+      - Proportional
+    icon: mdi:tune
+    initial: Aggressive
+
+  # --- Zone 4 (first_floor) ---
+  keenect_zone_4_temp_sensor:
+    name: "Zone 4 Temp Sensor"
+    options:
+      - "(none)"
+    icon: mdi:thermometer
+
+  keenect_zone_4_thermostat:
+    name: "Zone 4 Thermostat"
+    options:
+      - "(none)"
+    icon: mdi:thermostat
+
+  keenect_zone_4_vent_1:
+    name: "Zone 4 Vent 1"
+    options:
+      - "(none)"
+    icon: mdi:air-filter
+
+  keenect_zone_4_vent_2:
+    name: "Zone 4 Vent 2"
+    options:
+      - "(none)"
+    icon: mdi:air-filter
+
+  keenect_zone_4_vent_type:
+    name: "Zone 4 Vent Type"
+    options:
+      - light
+      - number
+    icon: mdi:format-list-bulleted
+    initial: number
+
+  keenect_zone_4_vent_control:
+    name: "Zone 4 Vent Control"
+    options:
+      - Aggressive
+      - Proportional
+    icon: mdi:tune
+    initial: Aggressive
+
+  # --- Passive Zone Temp Sensors ---
+  keenect_passive_1_temp_sensor:
+    name: "Passive Zone 1 Temp Sensor"
+    options:
+      - "(none)"
+    icon: mdi:thermometer
+
+  keenect_passive_2_temp_sensor:
+    name: "Passive Zone 2 Temp Sensor"
+    options:
+      - "(none)"
+    icon: mdi:thermometer
+
+  keenect_passive_3_temp_sensor:
+    name: "Passive Zone 3 Temp Sensor"
+    options:
+      - "(none)"
+    icon: mdi:thermometer
+
+  keenect_passive_4_temp_sensor:
+    name: "Passive Zone 4 Temp Sensor"
+    options:
+      - "(none)"
+    icon: mdi:thermometer
+
+
+input_number:
+
+  # --- Zone 1 (ben) ---
+  keenect_zone_1_heat_min_vo:
+    name: "Zone 1 Heat Min VO"
+    min: 0
+    max: 100
+    step: 1
+    unit_of_measurement: "%"
+    icon: mdi:arrow-collapse-down
+    mode: box
+    initial: 15
+
+  keenect_zone_1_heat_max_vo:
+    name: "Zone 1 Heat Max VO"
+    min: 0
+    max: 100
+    step: 1
+    unit_of_measurement: "%"
+    icon: mdi:arrow-collapse-up
+    mode: box
+    initial: 100
+
+  keenect_zone_1_cool_min_vo:
+    name: "Zone 1 Cool Min VO"
+    min: 0
+    max: 100
+    step: 1
+    unit_of_measurement: "%"
+    icon: mdi:arrow-collapse-down
+    mode: box
+    initial: 15
+
+  keenect_zone_1_cool_max_vo:
+    name: "Zone 1 Cool Max VO"
+    min: 0
+    max: 100
+    step: 1
+    unit_of_measurement: "%"
+    icon: mdi:arrow-collapse-up
+    mode: box
+    initial: 100
+
+  keenect_zone_1_fan_vo:
+    name: "Zone 1 Fan VO"
+    min: 0
+    max: 100
+    step: 1
+    unit_of_measurement: "%"
+    icon: mdi:fan
+    mode: box
+    initial: 30
+
+  keenect_zone_1_heat_default:
+    name: "Zone 1 Heat Default"
+    min: 50
+    max: 90
+    step: 1
+    unit_of_measurement: "°F"
+    icon: mdi:fire
+    mode: box
+    initial: 62
+
+  keenect_zone_1_cool_default:
+    name: "Zone 1 Cool Default"
+    min: 50
+    max: 90
+    step: 1
+    unit_of_measurement: "°F"
+    icon: mdi:snowflake
+    mode: box
+    initial: 76
+
+  # --- Zone 2 (gene) ---
+  keenect_zone_2_heat_min_vo:
+    name: "Zone 2 Heat Min VO"
+    min: 0
+    max: 100
+    step: 1
+    unit_of_measurement: "%"
+    icon: mdi:arrow-collapse-down
+    mode: box
+    initial: 15
+
+  keenect_zone_2_heat_max_vo:
+    name: "Zone 2 Heat Max VO"
+    min: 0
+    max: 100
+    step: 1
+    unit_of_measurement: "%"
+    icon: mdi:arrow-collapse-up
+    mode: box
+    initial: 100
+
+  keenect_zone_2_cool_min_vo:
+    name: "Zone 2 Cool Min VO"
+    min: 0
+    max: 100
+    step: 1
+    unit_of_measurement: "%"
+    icon: mdi:arrow-collapse-down
+    mode: box
+    initial: 15
+
+  keenect_zone_2_cool_max_vo:
+    name: "Zone 2 Cool Max VO"
+    min: 0
+    max: 100
+    step: 1
+    unit_of_measurement: "%"
+    icon: mdi:arrow-collapse-up
+    mode: box
+    initial: 100
+
+  keenect_zone_2_fan_vo:
+    name: "Zone 2 Fan VO"
+    min: 0
+    max: 100
+    step: 1
+    unit_of_measurement: "%"
+    icon: mdi:fan
+    mode: box
+    initial: 30
+
+  keenect_zone_2_heat_default:
+    name: "Zone 2 Heat Default"
+    min: 50
+    max: 90
+    step: 1
+    unit_of_measurement: "°F"
+    icon: mdi:fire
+    mode: box
+    initial: 62
+
+  keenect_zone_2_cool_default:
+    name: "Zone 2 Cool Default"
+    min: 50
+    max: 90
+    step: 1
+    unit_of_measurement: "°F"
+    icon: mdi:snowflake
+    mode: box
+    initial: 76
+
+  # --- Zone 3 (mbr) ---
+  keenect_zone_3_heat_min_vo:
+    name: "Zone 3 Heat Min VO"
+    min: 0
+    max: 100
+    step: 1
+    unit_of_measurement: "%"
+    icon: mdi:arrow-collapse-down
+    mode: box
+    initial: 15
+
+  keenect_zone_3_heat_max_vo:
+    name: "Zone 3 Heat Max VO"
+    min: 0
+    max: 100
+    step: 1
+    unit_of_measurement: "%"
+    icon: mdi:arrow-collapse-up
+    mode: box
+    initial: 100
+
+  keenect_zone_3_cool_min_vo:
+    name: "Zone 3 Cool Min VO"
+    min: 0
+    max: 100
+    step: 1
+    unit_of_measurement: "%"
+    icon: mdi:arrow-collapse-down
+    mode: box
+    initial: 15
+
+  keenect_zone_3_cool_max_vo:
+    name: "Zone 3 Cool Max VO"
+    min: 0
+    max: 100
+    step: 1
+    unit_of_measurement: "%"
+    icon: mdi:arrow-collapse-up
+    mode: box
+    initial: 100
+
+  keenect_zone_3_fan_vo:
+    name: "Zone 3 Fan VO"
+    min: 0
+    max: 100
+    step: 1
+    unit_of_measurement: "%"
+    icon: mdi:fan
+    mode: box
+    initial: 30
+
+  keenect_zone_3_heat_default:
+    name: "Zone 3 Heat Default"
+    min: 50
+    max: 90
+    step: 1
+    unit_of_measurement: "°F"
+    icon: mdi:fire
+    mode: box
+    initial: 64
+
+  keenect_zone_3_cool_default:
+    name: "Zone 3 Cool Default"
+    min: 50
+    max: 90
+    step: 1
+    unit_of_measurement: "°F"
+    icon: mdi:snowflake
+    mode: box
+    initial: 76
+
+  # --- Zone 4 (first_floor) ---
+  keenect_zone_4_heat_min_vo:
+    name: "Zone 4 Heat Min VO"
+    min: 0
+    max: 100
+    step: 1
+    unit_of_measurement: "%"
+    icon: mdi:arrow-collapse-down
+    mode: box
+    initial: 7
+
+  keenect_zone_4_heat_max_vo:
+    name: "Zone 4 Heat Max VO"
+    min: 0
+    max: 100
+    step: 1
+    unit_of_measurement: "%"
+    icon: mdi:arrow-collapse-up
+    mode: box
+    initial: 45
+
+  keenect_zone_4_cool_min_vo:
+    name: "Zone 4 Cool Min VO"
+    min: 0
+    max: 100
+    step: 1
+    unit_of_measurement: "%"
+    icon: mdi:arrow-collapse-down
+    mode: box
+    initial: 7
+
+  keenect_zone_4_cool_max_vo:
+    name: "Zone 4 Cool Max VO"
+    min: 0
+    max: 100
+    step: 1
+    unit_of_measurement: "%"
+    icon: mdi:arrow-collapse-up
+    mode: box
+    initial: 45
+
+  keenect_zone_4_fan_vo:
+    name: "Zone 4 Fan VO"
+    min: 0
+    max: 100
+    step: 1
+    unit_of_measurement: "%"
+    icon: mdi:fan
+    mode: box
+    initial: 15
+
+  keenect_zone_4_heat_default:
+    name: "Zone 4 Heat Default"
+    min: 50
+    max: 90
+    step: 1
+    unit_of_measurement: "°F"
+    icon: mdi:fire
+    mode: box
+    initial: 69
+
+  keenect_zone_4_cool_default:
+    name: "Zone 4 Cool Default"
+    min: 50
+    max: 90
+    step: 1
+    unit_of_measurement: "°F"
+    icon: mdi:snowflake
+    mode: box
+    initial: 76

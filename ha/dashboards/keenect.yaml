@@ -123,9 +123,10 @@ views:
             name: Anomalies
           - type: custom:fold-entity-row
             head:
-              entity: sensor.keenect_zone_rates
-              name: "Zone Learning"
+              type: section
+              label: "Zone Learning"
             entities:
+              - entity: sensor.keenect_zone_rates
               - entity: sensor.keenect_rate_ben
                 name: Ben
               - entity: sensor.keenect_rate_gene
@@ -136,9 +137,10 @@ views:
                 name: 1st Floor
           - type: custom:fold-entity-row
             head:
-              entity: sensor.keenect_drift
-              name: "Overnight Heat Loss"
+              type: section
+              label: "Overnight Heat Loss"
             entities:
+              - entity: sensor.keenect_drift
               - entity: sensor.keenect_drift_ben
                 name: Ben
               - entity: sensor.keenect_drift_gene
@@ -242,11 +244,11 @@ views:
         title: Zone Temperatures
         hours_to_show: 24
         entities:
-          - entity: sensor.gw1000_temp_ch4
+          - entity: sensor.gw1000_temp_ch7
             name: Ben
           - entity: sensor.gw1000_temp_ch6
             name: Gene
-          - entity: sensor.gw1000_temp_ch7
+          - entity: sensor.gw1000_temp_ch4
             name: Master BR
           - entity: sensor.gw1000_indoor_temperature
             name: 1st Floor
@@ -265,11 +267,11 @@ views:
         title: Zone Humidity
         hours_to_show: 24
         entities:
-          - entity: sensor.gw1000_humidity_ch4
+          - entity: sensor.gw1000_humidity_ch7
             name: Ben
           - entity: sensor.gw1000_humidity_ch6
             name: Gene
-          - entity: sensor.gw1000_humidity_ch7
+          - entity: sensor.gw1000_humidity_ch4
             name: Master BR
           - entity: sensor.gw1000_indoor_humidity
             name: 1st Floor
@@ -318,3 +320,319 @@ views:
             name: Cool Hours
           - entity: sensor.hvac_cool_cost_daily
             name: Cool Cost ($)
+
+  - title: Config
+    path: config
+    icon: mdi:cog
+    cards:
+      # Status / Apply card
+      - type: entities
+        title: Zone Configuration
+        entities:
+          - entity: input_button.keenect_apply_config
+            name: Apply Config Changes
+
+      # Zone enable/disable toggles (always visible)
+      - type: entities
+        title: "Active Zones"
+        show_header_toggle: false
+        entities:
+          - entity: input_boolean.keenect_zone_1_enabled
+            name: "Zone 1 (ben)"
+          - entity: input_boolean.keenect_zone_2_enabled
+            name: "Zone 2 (gene)"
+          - entity: input_boolean.keenect_zone_3_enabled
+            name: "Zone 3 (mbr)"
+          - entity: input_boolean.keenect_zone_4_enabled
+            name: "Zone 4 (first_floor)"
+      - type: entities
+        title: "Passive Zones"
+        show_header_toggle: false
+        entities:
+          - entity: input_boolean.keenect_passive_1_enabled
+            name: "Passive 1 (master_bath)"
+          - entity: input_boolean.keenect_passive_2_enabled
+            name: "Passive 2 (office)"
+          - entity: input_boolean.keenect_passive_3_enabled
+            name: "Passive 3 (basement)"
+          - entity: input_boolean.keenect_passive_4_enabled
+            name: "Passive 4 (guest_bedroom)"
+
+      # Active zones (1-column grid - full width for long entity names)
+      - type: grid
+        columns: 1
+        square: false
+        cards:
+          - type: conditional
+            conditions:
+              - condition: state
+                entity: input_boolean.keenect_zone_1_enabled
+                state: "on"
+            card:
+              type: entities
+              title: "Zone 1"
+              show_header_toggle: false
+              entities:
+                - entity: input_text.keenect_zone_1_name
+                  name: Zone Name
+                - entity: input_select.keenect_zone_1_temp_sensor
+                  name: Temperature Sensor
+                - entity: input_select.keenect_zone_1_thermostat
+                  name: Thermostat
+                - entity: input_select.keenect_zone_1_vent_1
+                  name: Vent 1
+                - entity: input_select.keenect_zone_1_vent_2
+                  name: Vent 2
+                - entity: input_select.keenect_zone_1_vent_type
+                  name: Vent Type
+                - entity: input_select.keenect_zone_1_vent_control
+                  name: Vent Control
+                - type: custom:fold-entity-row
+                  head:
+                    type: section
+                    label: Vent Limits
+                  entities:
+                    - entity: input_number.keenect_zone_1_heat_min_vo
+                      name: Heat Min
+                    - entity: input_number.keenect_zone_1_heat_max_vo
+                      name: Heat Max
+                    - entity: input_number.keenect_zone_1_cool_min_vo
+                      name: Cool Min
+                    - entity: input_number.keenect_zone_1_cool_max_vo
+                      name: Cool Max
+                    - entity: input_number.keenect_zone_1_fan_vo
+                      name: Fan
+                - type: custom:fold-entity-row
+                  head:
+                    type: section
+                    label: Default Setpoints
+                  entities:
+                    - entity: input_number.keenect_zone_1_heat_default
+                      name: Heat Default
+                    - entity: input_number.keenect_zone_1_cool_default
+                      name: Cool Default
+
+          - type: conditional
+            conditions:
+              - condition: state
+                entity: input_boolean.keenect_zone_2_enabled
+                state: "on"
+            card:
+              type: entities
+              title: "Zone 2"
+              show_header_toggle: false
+              entities:
+                - entity: input_text.keenect_zone_2_name
+                  name: Zone Name
+                - entity: input_select.keenect_zone_2_temp_sensor
+                  name: Temperature Sensor
+                - entity: input_select.keenect_zone_2_thermostat
+                  name: Thermostat
+                - entity: input_select.keenect_zone_2_vent_1
+                  name: Vent 1
+                - entity: input_select.keenect_zone_2_vent_2
+                  name: Vent 2
+                - entity: input_select.keenect_zone_2_vent_type
+                  name: Vent Type
+                - entity: input_select.keenect_zone_2_vent_control
+                  name: Vent Control
+                - type: custom:fold-entity-row
+                  head:
+                    type: section
+                    label: Vent Limits
+                  entities:
+                    - entity: input_number.keenect_zone_2_heat_min_vo
+                      name: Heat Min
+                    - entity: input_number.keenect_zone_2_heat_max_vo
+                      name: Heat Max
+                    - entity: input_number.keenect_zone_2_cool_min_vo
+                      name: Cool Min
+                    - entity: input_number.keenect_zone_2_cool_max_vo
+                      name: Cool Max
+                    - entity: input_number.keenect_zone_2_fan_vo
+                      name: Fan
+                - type: custom:fold-entity-row
+                  head:
+                    type: section
+                    label: Default Setpoints
+                  entities:
+                    - entity: input_number.keenect_zone_2_heat_default
+                      name: Heat Default
+                    - entity: input_number.keenect_zone_2_cool_default
+                      name: Cool Default
+
+          - type: conditional
+            conditions:
+              - condition: state
+                entity: input_boolean.keenect_zone_3_enabled
+                state: "on"
+            card:
+              type: entities
+              title: "Zone 3"
+              show_header_toggle: false
+              entities:
+                - entity: input_text.keenect_zone_3_name
+                  name: Zone Name
+                - entity: input_select.keenect_zone_3_temp_sensor
+                  name: Temperature Sensor
+                - entity: input_select.keenect_zone_3_thermostat
+                  name: Thermostat
+                - entity: input_select.keenect_zone_3_vent_1
+                  name: Vent 1
+                - entity: input_select.keenect_zone_3_vent_2
+                  name: Vent 2
+                - entity: input_select.keenect_zone_3_vent_type
+                  name: Vent Type
+                - entity: input_select.keenect_zone_3_vent_control
+                  name: Vent Control
+                - type: custom:fold-entity-row
+                  head:
+                    type: section
+                    label: Vent Limits
+                  entities:
+                    - entity: input_number.keenect_zone_3_heat_min_vo
+                      name: Heat Min
+                    - entity: input_number.keenect_zone_3_heat_max_vo
+                      name: Heat Max
+                    - entity: input_number.keenect_zone_3_cool_min_vo
+                      name: Cool Min
+                    - entity: input_number.keenect_zone_3_cool_max_vo
+                      name: Cool Max
+                    - entity: input_number.keenect_zone_3_fan_vo
+                      name: Fan
+                - type: custom:fold-entity-row
+                  head:
+                    type: section
+                    label: Default Setpoints
+                  entities:
+                    - entity: input_number.keenect_zone_3_heat_default
+                      name: Heat Default
+                    - entity: input_number.keenect_zone_3_cool_default
+                      name: Cool Default
+
+          - type: conditional
+            conditions:
+              - condition: state
+                entity: input_boolean.keenect_zone_4_enabled
+                state: "on"
+            card:
+              type: entities
+              title: "Zone 4"
+              show_header_toggle: false
+              entities:
+                - entity: input_text.keenect_zone_4_name
+                  name: Zone Name
+                - entity: input_select.keenect_zone_4_temp_sensor
+                  name: Temperature Sensor
+                - entity: input_select.keenect_zone_4_thermostat
+                  name: Thermostat
+                - entity: input_select.keenect_zone_4_vent_1
+                  name: Vent 1
+                - entity: input_select.keenect_zone_4_vent_2
+                  name: Vent 2
+                - entity: input_select.keenect_zone_4_vent_type
+                  name: Vent Type
+                - entity: input_select.keenect_zone_4_vent_control
+                  name: Vent Control
+                - type: custom:fold-entity-row
+                  head:
+                    type: section
+                    label: Vent Limits
+                  entities:
+                    - entity: input_number.keenect_zone_4_heat_min_vo
+                      name: Heat Min
+                    - entity: input_number.keenect_zone_4_heat_max_vo
+                      name: Heat Max
+                    - entity: input_number.keenect_zone_4_cool_min_vo
+                      name: Cool Min
+                    - entity: input_number.keenect_zone_4_cool_max_vo
+                      name: Cool Max
+                    - entity: input_number.keenect_zone_4_fan_vo
+                      name: Fan
+                - type: custom:fold-entity-row
+                  head:
+                    type: section
+                    label: Default Setpoints
+                  entities:
+                    - entity: input_number.keenect_zone_4_heat_default
+                      name: Heat Default
+                    - entity: input_number.keenect_zone_4_cool_default
+                      name: Cool Default
+
+      # Passive zones (1-column grid - full width for long entity names)
+      - type: grid
+        columns: 1
+        square: false
+        cards:
+          - type: conditional
+            conditions:
+              - condition: state
+                entity: input_boolean.keenect_passive_1_enabled
+                state: "on"
+            card:
+              type: entities
+              title: "Passive Zone 1"
+              show_header_toggle: false
+              entities:
+                - entity: input_text.keenect_passive_1_name
+                  name: Zone Name
+                - entity: input_select.keenect_passive_1_temp_sensor
+                  name: Temperature Sensor
+
+          - type: conditional
+            conditions:
+              - condition: state
+                entity: input_boolean.keenect_passive_2_enabled
+                state: "on"
+            card:
+              type: entities
+              title: "Passive Zone 2"
+              show_header_toggle: false
+              entities:
+                - entity: input_text.keenect_passive_2_name
+                  name: Zone Name
+                - entity: input_select.keenect_passive_2_temp_sensor
+                  name: Temperature Sensor
+
+          - type: conditional
+            conditions:
+              - condition: state
+                entity: input_boolean.keenect_passive_3_enabled
+                state: "on"
+            card:
+              type: entities
+              title: "Passive Zone 3"
+              show_header_toggle: false
+              entities:
+                - entity: input_text.keenect_passive_3_name
+                  name: Zone Name
+                - entity: input_select.keenect_passive_3_temp_sensor
+                  name: Temperature Sensor
+
+          - type: conditional
+            conditions:
+              - condition: state
+                entity: input_boolean.keenect_passive_4_enabled
+                state: "on"
+            card:
+              type: entities
+              title: "Passive Zone 4"
+              show_header_toggle: false
+              entities:
+                - entity: input_text.keenect_passive_4_name
+                  name: Zone Name
+                - entity: input_select.keenect_passive_4_temp_sensor
+                  name: Temperature Sensor
+
+      # Add zone guidance
+      - type: markdown
+        content: >
+          ### Adding Zones
+
+          To add a new active zone, enable it in Home Assistant via its
+          `input_boolean.keenect_zone_N_enabled` helper — the zone card will
+          appear here automatically. Fill in the zone name, sensor, thermostat,
+          and vent assignments, then toggle **Apply Config Changes** to activate.
+
+          To add a passive zone (temperature monitoring only, no vents), enable
+          `input_boolean.keenect_passive_N_enabled` the same way.

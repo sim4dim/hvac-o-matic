@@ -17,12 +17,12 @@ import urllib.request
 import urllib.parse
 
 # ---------------------------------------------------------------------------
-# Zone configuration
+# Zone configuration — hardcoded fallback (Phase 1)
 # ---------------------------------------------------------------------------
-ZONES = {
+_HARDCODED_ZONES = {
     "ben": {
         "thermostat": "climate.ben_s_room",
-        "temp_sensor": "sensor.gw1000_temp_ch4",
+        "temp_sensor": "sensor.gw1000_temp_ch7",
         "vents": ["light.keen_ben"],
         "vent_type": "light",
         "health_sensors": ["sensor.keen_ben_pressure"],
@@ -44,7 +44,7 @@ ZONES = {
     },
     "mbr": {
         "thermostat": "climate.master_bedroom",
-        "temp_sensor": "sensor.gw1000_temp_ch7",
+        "temp_sensor": "sensor.gw1000_temp_ch4",
         "vents": ["light.keen_mbr_1", "light.keen_mbr_2"],
         "vent_type": "light",
         "health_sensors": ["sensor.keen_mbr_1_pressure", "sensor.keen_mbr_2_pressure"],
@@ -66,9 +66,7 @@ ZONES = {
     },
 }
 
-# Passive zones: temperature-only sensors, no vents or thermostats.
-# Tracked for drift analysis only — not part of active HVAC control.
-PASSIVE_ZONES = {
+_HARDCODED_PASSIVE = {
     "master_bath": {
         "temp_sensor": "sensor.master_bathroom_temperature_temperature",
     },
@@ -83,13 +81,258 @@ PASSIVE_ZONES = {
     },
 }
 
-# Default setpoints for restoring from away mode
-ZONE_DEFAULTS = {
+_HARDCODED_DEFAULTS = {
     "ben": {"heat": 62, "cool": 76},
     "gene": {"heat": 62, "cool": 76},
     "mbr": {"heat": 64, "cool": 76},
     "first_floor": {"heat": 69, "cool": 76},
 }
+
+# ---------------------------------------------------------------------------
+# Zone configuration — loaded from HA helpers at startup
+# ---------------------------------------------------------------------------
+ZONES = {}
+PASSIVE_ZONES = {}
+ZONE_DEFAULTS = {}
+
+
+def _populate_dropdowns():
+    """Populate config dropdown options from available HA entities."""
+    try:
+        # Temperature sensors
+        all_sensors = state.names(domain="sensor")
+        temp_sensors = sorted([s for s in all_sensors
+                               if "temperature" in s.lower() or "temp" in s.lower()])
+        # Also include any sensor with device_class temperature
+        for s in all_sensors:
+            attrs = state.getattr(s)
+            if attrs and attrs.get("device_class") == "temperature" and s not in temp_sensors:
+                temp_sensors.append(s)
+        temp_sensors = sorted(set(temp_sensors))
+
+        # Thermostats
+        thermostats = sorted(state.names(domain="climate"))
+
+        # Vents — lights (Keen vents) and numbers (servo registers)
+        lights = sorted(state.names(domain="light"))
+        numbers = sorted(state.names(domain="number"))
+        vent_options = sorted(lights + numbers)
+
+        for slot in range(1, 5):
+            pfx = f"keenect_zone_{slot}"
+            input_select.set_options(
+                entity_id=f"input_select.{pfx}_temp_sensor",
+                options=["(none)"] + temp_sensors)
+            input_select.set_options(
+                entity_id=f"input_select.{pfx}_thermostat",
+                options=["(none)"] + thermostats)
+            input_select.set_options(
+                entity_id=f"input_select.{pfx}_vent_1",
+                options=["(none)"] + vent_options)
+            input_select.set_options(
+                entity_id=f"input_select.{pfx}_vent_2",
+                options=["(none)"] + vent_options)
+
+        for slot in range(1, 5):
+            pfx = f"keenect_passive_{slot}"
+            input_select.set_options(
+                entity_id=f"input_select.{pfx}_temp_sensor",
+                options=["(none)"] + temp_sensors)
+
+        log.info(f"keenect: populated dropdowns — {len(temp_sensors)} temp sensors, "
+                 f"{len(thermostats)} thermostats, {len(vent_options)} vent entities")
+    except Exception as e:
+        log.error(f"keenect: failed to populate dropdowns: {e}")
+
+
+def _load_zone_config():
+    """Load zone configuration from HA helper entities."""
+    global ZONES, PASSIVE_ZONES, ZONE_DEFAULTS
+    zones = {}
+    passive = {}
+    defaults = {}
+
+    all_sensor_names = state.names(domain="sensor")
+
+    for slot in range(1, 5):
+        pfx = f"keenect_zone_{slot}"
+        enabled = state.get(f"input_boolean.{pfx}_enabled")
+        if enabled != "on":
+            continue
+        name = str(state.get(f"input_text.{pfx}_name") or "").strip().lower().replace(" ", "_")
+        if not name or name in ("unknown", ""):
+            log.warning(f"keenect: zone slot {slot} enabled but no name set")
+            continue
+
+        temp_sensor = state.get(f"input_select.{pfx}_temp_sensor")
+        thermostat = state.get(f"input_select.{pfx}_thermostat")
+        vent_1 = state.get(f"input_select.{pfx}_vent_1")
+        vent_2 = state.get(f"input_select.{pfx}_vent_2")
+        vent_type = state.get(f"input_select.{pfx}_vent_type") or "light"
+        vent_control = state.get(f"input_select.{pfx}_vent_control") or "Aggressive"
+
+        if not temp_sensor or temp_sensor == "(none)":
+            log.warning(f"keenect: zone '{name}' has no temp sensor")
+            continue
+        if not thermostat or thermostat == "(none)":
+            log.warning(f"keenect: zone '{name}' has no thermostat")
+            continue
+
+        vents = [v for v in [vent_1, vent_2] if v and v != "(none)"]
+        if not vents:
+            log.warning(f"keenect: zone '{name}' has no vents")
+            continue
+
+        # Auto-discover health sensors by convention: light.keen_X -> sensor.keen_X_pressure
+        health_sensors = []
+        for v in vents:
+            if vent_type == "light":
+                vent_suffix = v.replace("light.", "")
+                health_entity = f"sensor.{vent_suffix}_pressure"
+                if health_entity in all_sensor_names:
+                    health_sensors.append(health_entity)
+
+        heat_min = int(float(state.get(f"input_number.{pfx}_heat_min_vo") or 15))
+        heat_max = int(float(state.get(f"input_number.{pfx}_heat_max_vo") or 100))
+        cool_min = int(float(state.get(f"input_number.{pfx}_cool_min_vo") or 15))
+        cool_max = int(float(state.get(f"input_number.{pfx}_cool_max_vo") or 100))
+        fan_vo = int(float(state.get(f"input_number.{pfx}_fan_vo") or 30))
+        heat_def = int(float(state.get(f"input_number.{pfx}_heat_default") or 62))
+        cool_def = int(float(state.get(f"input_number.{pfx}_cool_default") or 76))
+
+        zones[name] = {
+            "thermostat": thermostat,
+            "temp_sensor": temp_sensor,
+            "vents": vents,
+            "vent_type": vent_type,
+            "health_sensors": health_sensors,
+            "heat_min_vo": heat_min,
+            "heat_max_vo": heat_max,
+            "cool_min_vo": cool_min,
+            "cool_max_vo": cool_max,
+            "fan_vo": fan_vo,
+            "vent_control": vent_control,
+        }
+        defaults[name] = {"heat": heat_def, "cool": cool_def}
+
+    # Passive zones
+    for slot in range(1, 5):
+        pfx = f"keenect_passive_{slot}"
+        enabled = state.get(f"input_boolean.{pfx}_enabled")
+        if enabled != "on":
+            continue
+        name = str(state.get(f"input_text.{pfx}_name") or "").strip().lower().replace(" ", "_")
+        if not name or name in ("unknown", ""):
+            continue
+        temp_sensor = state.get(f"input_select.{pfx}_temp_sensor")
+        if not temp_sensor or temp_sensor == "(none)":
+            continue
+        passive[name] = {"temp_sensor": temp_sensor}
+
+    ZONES = zones
+    PASSIVE_ZONES = passive
+    ZONE_DEFAULTS = defaults
+
+    log.info(f"keenect: loaded {len(ZONES)} active zones: {list(ZONES.keys())}")
+    log.info(f"keenect: loaded {len(PASSIVE_ZONES)} passive zones: {list(PASSIVE_ZONES.keys())}")
+    return len(ZONES) > 0
+
+
+def _build_derived_maps():
+    """Build setpoint map, zone codes, trigger entity lists from loaded config."""
+    global _SETPOINT_MAP, _ZONE_TO_CODE, _CODE_TO_ZONE
+    _SETPOINT_MAP = {}
+    for zn in ZONES:
+        _SETPOINT_MAP[f"input_number.{zn}_heat_setpoint"] = (zn, "heat")
+        _SETPOINT_MAP[f"input_number.{zn}_cool_setpoint"] = (zn, "cool")
+
+    _ZONE_TO_CODE = {}
+    _CODE_TO_ZONE = {}
+    used = set()
+    for zn in ZONES:
+        display = zn.replace("_", " ").title()
+        code = display[0].lower()
+        i = 1
+        while code in used or not code.isalpha():
+            if i >= len(display):
+                code = zn[0]  # ultimate fallback to raw zone name char
+                break
+            code = display[i].lower()
+            i += 1
+        used.add(code)
+        _ZONE_TO_CODE[display] = code
+        _CODE_TO_ZONE[code] = display
+
+
+def _persist_zone_config():
+    """Save current input_select values to input_text for restart survival."""
+    for slot in range(1, 5):
+        pfx = f"keenect_zone_{slot}"
+        data = {
+            "ts": state.get(f"input_select.{pfx}_temp_sensor") or "(none)",
+            "th": state.get(f"input_select.{pfx}_thermostat") or "(none)",
+            "v1": state.get(f"input_select.{pfx}_vent_1") or "(none)",
+            "v2": state.get(f"input_select.{pfx}_vent_2") or "(none)",
+        }
+        val = json_mod.dumps(data, separators=(',', ':'))
+        input_text.set_value(entity_id=f"input_text.{pfx}_persist", value=val)
+
+    for slot in range(1, 5):
+        pfx = f"keenect_passive_{slot}"
+        data = {
+            "ts": state.get(f"input_select.{pfx}_temp_sensor") or "(none)",
+        }
+        val = json_mod.dumps(data, separators=(',', ':'))
+        input_text.set_value(entity_id=f"input_text.{pfx}_persist", value=val)
+
+    log.info("keenect: zone config persisted to input_text backing store")
+
+
+def _restore_zone_selects():
+    """Restore input_select values from persisted input_text after restart."""
+    restored = 0
+    for slot in range(1, 5):
+        pfx = f"keenect_zone_{slot}"
+        raw = state.get(f"input_text.{pfx}_persist")
+        if not raw or raw in ("unknown", "", "unavailable"):
+            continue
+        try:
+            data = json_mod.loads(raw)
+            for key, entity_suffix in [("ts", "temp_sensor"), ("th", "thermostat"),
+                                        ("v1", "vent_1"), ("v2", "vent_2")]:
+                val = data.get(key, "(none)")
+                if val and val != "(none)":
+                    try:
+                        input_select.select_option(
+                            entity_id=f"input_select.{pfx}_{entity_suffix}",
+                            option=val)
+                        restored += 1
+                    except Exception as e:
+                        log.warning(f"keenect: failed to restore {pfx}_{entity_suffix}={val}: {e}")
+        except Exception as e:
+            log.warning(f"keenect: failed to parse {pfx}_persist: {e}")
+
+    for slot in range(1, 5):
+        pfx = f"keenect_passive_{slot}"
+        raw = state.get(f"input_text.{pfx}_persist")
+        if not raw or raw in ("unknown", "", "unavailable"):
+            continue
+        try:
+            data = json_mod.loads(raw)
+            val = data.get("ts", "(none)")
+            if val and val != "(none)":
+                try:
+                    input_select.select_option(
+                        entity_id=f"input_select.{pfx}_temp_sensor",
+                        option=val)
+                    restored += 1
+                except Exception as e:
+                    log.warning(f"keenect: failed to restore {pfx}_temp_sensor={val}: {e}")
+        except Exception as e:
+            log.warning(f"keenect: failed to parse {pfx}_persist: {e}")
+
+    log.info(f"keenect: restored {restored} dropdown selections from backing store")
+
 
 # HVAC Flask server - direct HTTP control (bypasses Hubitat driver)
 HVAC_SERVER = "http://192.168.1.123:5000"
@@ -134,6 +377,7 @@ SENSOR_FAIL_ALERT = 3       # consecutive None readings before alert (~45s at 15
 SENSOR_FAIL_NEUTRAL = 10    # consecutive None readings before moving vents to neutral (~2.5min)
 
 # Setpoint change tracking — maps input_number to (zone, heat/cool)
+# Populated dynamically by _build_derived_maps() at startup
 _SETPOINT_MAP = {
     "input_number.ben_heat_setpoint": ("ben", "heat"),
     "input_number.ben_cool_setpoint": ("ben", "cool"),
@@ -149,6 +393,7 @@ STATE_ENTITY = "input_text.keenect_persisted_state"
 SETPOINT_LOG_ENTITY = "input_text.keenect_setpoint_log_data"
 
 # Zone name <-> compact code for setpoint log persistence (255 char limit)
+# Populated dynamically by _build_derived_maps() at startup; static values are fallback
 _ZONE_TO_CODE = {"Ben": "b", "Gene": "g", "Mbr": "m", "First Floor": "f"}
 _CODE_TO_ZONE = {"b": "Ben", "g": "Gene", "m": "Mbr", "f": "First Floor"}
 
@@ -1353,6 +1598,18 @@ def on_startup():
     safety_synced = False
     try:
         _build_user_cache()
+        # Load zone config from HA helpers (with hardcoded fallback)
+        global ZONES, PASSIVE_ZONES, ZONE_DEFAULTS
+        _populate_dropdowns()
+        _restore_zone_selects()  # restore persisted dropdown values after options are populated
+        _load_zone_config()
+        _build_derived_maps()
+        if not ZONES:
+            log.warning("keenect: no zones from helpers, using hardcoded fallback")
+            ZONES = _HARDCODED_ZONES
+            PASSIVE_ZONES = _HARDCODED_PASSIVE
+            ZONE_DEFAULTS = _HARDCODED_DEFAULTS
+            _build_derived_maps()
         _load_state()
         log.info(
             f"keenect: startup - hvac_on={_st['hvac_on']} "
@@ -1461,6 +1718,107 @@ def on_startup():
                 _hvac_push(7)  # fanOff
             except Exception as e2:
                 log.error(f"keenect: startup finally block failed: {e2}")
+
+
+@state_trigger("input_button.keenect_apply_config")
+def _on_apply_config(**kwargs):
+    """Reload zone config when user clicks Apply."""
+    global ZONES, PASSIVE_ZONES, ZONE_DEFAULTS
+    log.info("keenect: applying config changes")
+    _persist_zone_config()  # Save selections to input_text first
+    _load_zone_config()
+    _build_derived_maps()
+    if not ZONES:
+        log.warning("keenect: no zones from helpers after apply, using hardcoded fallback")
+        ZONES = _HARDCODED_ZONES
+        PASSIVE_ZONES = _HARDCODED_PASSIVE
+        ZONE_DEFAULTS = _HARDCODED_DEFAULTS
+        _build_derived_maps()
+
+    # Reconcile runtime state with new zone list
+    old_zones = set(_st.get("zone_states", {}).keys())
+    new_zones = set(ZONES.keys())
+
+    # Remove stale zones from runtime state
+    for removed in old_zones - new_zones:
+        log.info(f"keenect: removing stale zone '{removed}' from runtime state")
+        _st.get("zone_states", {}).pop(removed, None)
+        _st.get("vent_levels", {}).pop(removed, None)
+        _st.get("sensor_fail_count", {}).pop(removed, None)
+
+    # Initialize new zones
+    for added in new_zones - old_zones:
+        log.info(f"keenect: initializing new zone '{added}' in runtime state")
+        _st.setdefault("zone_states", {})[added] = "IDLE"
+        _st.setdefault("vent_levels", {})[added] = 0
+        _st.setdefault("sensor_fail_count", {})[added] = 0
+
+    _update_status()
+    # Turn the button back off
+    # input_button has no state to reset — press action is momentary
+    log.info(f"keenect: config applied — {len(ZONES)} zones active")
+
+
+@service
+def keenect_migrate_config():
+    """One-time: write current zone config to HA helpers for GUI editing."""
+    _populate_dropdowns()
+    task.sleep(2)  # let options propagate
+
+    # Zone 1 = ben
+    _set_zone_helper(1, "ben", "sensor.gw1000_temp_ch7", "climate.ben_s_room",
+                     "light.keen_ben", "(none)", "light", "Aggressive",
+                     15, 100, 15, 100, 30, 62, 76)
+    # Zone 2 = gene
+    _set_zone_helper(2, "gene", "sensor.gw1000_temp_ch6", "climate.gene_s_room",
+                     "light.keen_gene", "(none)", "light", "Aggressive",
+                     15, 100, 15, 100, 30, 62, 76)
+    # Zone 3 = mbr
+    _set_zone_helper(3, "mbr", "sensor.gw1000_temp_ch4", "climate.master_bedroom",
+                     "light.keen_mbr_1", "light.keen_mbr_2", "light", "Aggressive",
+                     15, 100, 15, 100, 30, 64, 76)
+    # Zone 4 = first_floor
+    _set_zone_helper(4, "first_floor", "sensor.gw1000_indoor_temperature", "climate.first_floor",
+                     "number.hvac_1st_floor_register_servo_angle", "(none)", "number", "Aggressive",
+                     7, 45, 7, 45, 15, 69, 76)
+
+    # Passive zones
+    _set_passive_helper(1, "master_bath", "sensor.master_bathroom_temperature_temperature")
+    _set_passive_helper(2, "office", "sensor.office_temperature_sonoff_temperature")
+    _set_passive_helper(3, "basement", "sensor.basement_sonoff_temperature")
+    _set_passive_helper(4, "guest_bedroom", "sensor.guest_bedroom_sonoff_temperature")
+
+    task.sleep(1)  # let HA process the select_option calls
+    _persist_zone_config()  # Persist to backing store for restart survival
+    log.info("keenect: migration complete — config written to HA helpers and persisted")
+
+
+def _set_zone_helper(slot, name, temp_sensor, thermostat, vent_1, vent_2,
+                     vent_type, vent_control, h_min, h_max, c_min, c_max, fan,
+                     heat_def, cool_def):
+    pfx = f"keenect_zone_{slot}"
+    input_boolean.turn_on(entity_id=f"input_boolean.{pfx}_enabled")
+    input_text.set_value(entity_id=f"input_text.{pfx}_name", value=name)
+    input_select.select_option(entity_id=f"input_select.{pfx}_temp_sensor", option=temp_sensor)
+    input_select.select_option(entity_id=f"input_select.{pfx}_thermostat", option=thermostat)
+    input_select.select_option(entity_id=f"input_select.{pfx}_vent_1", option=vent_1)
+    input_select.select_option(entity_id=f"input_select.{pfx}_vent_2", option=vent_2)
+    input_select.select_option(entity_id=f"input_select.{pfx}_vent_type", option=vent_type)
+    input_select.select_option(entity_id=f"input_select.{pfx}_vent_control", option=vent_control)
+    input_number.set_value(entity_id=f"input_number.{pfx}_heat_min_vo", value=h_min)
+    input_number.set_value(entity_id=f"input_number.{pfx}_heat_max_vo", value=h_max)
+    input_number.set_value(entity_id=f"input_number.{pfx}_cool_min_vo", value=c_min)
+    input_number.set_value(entity_id=f"input_number.{pfx}_cool_max_vo", value=c_max)
+    input_number.set_value(entity_id=f"input_number.{pfx}_fan_vo", value=fan)
+    input_number.set_value(entity_id=f"input_number.{pfx}_heat_default", value=heat_def)
+    input_number.set_value(entity_id=f"input_number.{pfx}_cool_default", value=cool_def)
+
+
+def _set_passive_helper(slot, name, temp_sensor):
+    pfx = f"keenect_passive_{slot}"
+    input_boolean.turn_on(entity_id=f"input_boolean.{pfx}_enabled")
+    input_text.set_value(entity_id=f"input_text.{pfx}_name", value=name)
+    input_select.select_option(entity_id=f"input_select.{pfx}_temp_sensor", option=temp_sensor)
 
 
 @time_trigger("period(now, 15s)")

@@ -156,7 +156,7 @@ climate:
     max_temp: 90
     temp_step: 1
 
-    current_temperature_template: "{{ states('sensor.gw1000_temp_ch4') | float(0) }}"
+    current_temperature_template: "{{ states('sensor.gw1000_temp_ch7') | float(0) }}"
 
     target_temperature_template: >-
       {% if states('input_select.hvac_mode') == 'COOL' %}
@@ -171,7 +171,7 @@ climate:
 
     hvac_action_template: >-
       {% set mode = states('input_select.hvac_mode') %}
-      {% set temp = states('sensor.gw1000_temp_ch4') | float(0) %}
+      {% set temp = states('sensor.gw1000_temp_ch7') | float(0) %}
       {% set heat_sp = states('input_number.ben_heat_setpoint') | float(62) %}
       {% set cool_sp = states('input_number.ben_cool_setpoint') | float(76) %}
       {% set zs = state_attr('sensor.keenect_vent_ben', 'zone_state') | default('IDLE') %}
@@ -211,7 +211,7 @@ climate:
     max_temp: 90
     temp_step: 1
 
-    current_temperature_template: "{{ states('sensor.gw1000_temp_ch7') | float(0) }}"
+    current_temperature_template: "{{ states('sensor.gw1000_temp_ch4') | float(0) }}"
 
     target_temperature_template: >-
       {% if states('input_select.hvac_mode') == 'COOL' %}
@@ -226,7 +226,7 @@ climate:
 
     hvac_action_template: >-
       {% set mode = states('input_select.hvac_mode') %}
-      {% set temp = states('sensor.gw1000_temp_ch7') | float(0) %}
+      {% set temp = states('sensor.gw1000_temp_ch4') | float(0) %}
       {% set heat_sp = states('input_number.mbr_heat_setpoint') | float(64) %}
       {% set cool_sp = states('input_number.mbr_cool_setpoint') | float(76) %}
       {% set zs = state_attr('sensor.keenect_vent_mbr', 'zone_state') | default('IDLE') %}
