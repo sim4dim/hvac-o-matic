@@ -184,35 +184,6 @@ views:
                 name: Cool Runtime Today
               - entity: sensor.hvac_cool_runtime_monthly
                 name: Cool Runtime Month
-          - type: custom:fold-entity-row
-            head:
-              type: section
-              label: Settings
-            entities:
-              - entity: input_number.away_heat_setpoint
-                name: Away Heat Setpoint
-              - entity: input_number.away_cool_setpoint
-                name: Away Cool Setpoint
-              - entity: input_number.cool_lockout_temp
-                name: Cool Lockout Temp
-              - entity: input_number.keenect_hysteresis
-                name: Hysteresis
-              - entity: input_number.vent_closure_delay
-                name: Vent Closure Delay
-              - entity: input_boolean.enable_recirculation
-                name: Smart Recirculation
-              - entity: input_number.recirculation_delay
-                name: Recirculation Delay
-              - entity: input_boolean.enable_circulation
-                name: Continuous Circulation
-              - entity: input_number.furnace_btu_input
-                name: Furnace BTU/h
-              - entity: input_number.gas_price_per_therm
-                name: Gas $/therm
-              - entity: input_number.ac_wattage
-                name: AC Wattage
-              - entity: input_number.electric_price_per_kwh
-                name: Electric $/kWh
 
   - title: Activity
     path: activity
@@ -631,6 +602,40 @@ views:
                   name: Zone Name
                 - entity: input_select.keenect_passive_4_temp_sensor
                   name: Temperature Sensor
+
+      # System settings (moved from Overview)
+      - type: entities
+        title: System Settings
+        show_header_toggle: false
+        entities:
+          - entity: input_number.keenect_hysteresis
+            name: Hysteresis
+          - entity: input_number.vent_closure_delay
+            name: Vent Closure Delay
+          - entity: input_number.cool_lockout_temp
+            name: Cool Lockout Temp
+          - entity: input_number.away_heat_setpoint
+            name: Away Heat Setpoint
+          - entity: input_number.away_cool_setpoint
+            name: Away Cool Setpoint
+          - entity: input_boolean.enable_recirculation
+            name: Smart Recirculation
+          - entity: input_number.recirculation_delay
+            name: Recirculation Delay
+          - entity: input_boolean.enable_circulation
+            name: Continuous Circulation
+      - type: entities
+        title: Energy Tracking
+        show_header_toggle: false
+        entities:
+          - entity: input_number.furnace_btu_input
+            name: Furnace BTU/h
+          - entity: input_number.gas_price_per_therm
+            name: Gas $/therm
+          - entity: input_number.ac_wattage
+            name: AC Wattage
+          - entity: input_number.electric_price_per_kwh
+            name: Electric $/kWh
 
       # Add zone guidance
       - type: markdown
