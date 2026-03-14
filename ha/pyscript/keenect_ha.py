@@ -1063,18 +1063,16 @@ def _calc_opening(zone_name, zstate, temp, setpoint):
 def _get_climate_attr(entity_id, attr, default=None):
     """Read a climate entity attribute."""
     try:
-        attrs = state.getattr(entity_id)
-        if attrs is None:
-            return default
-        val = attrs.get(attr)
+        # Use pyscript direct attribute access: state.get("entity.attr")
+        val = state.get(f"{entity_id}.{attr}")
     except Exception:
         return default
     if val is None:
         return default
     try:
-        return float(val) if isinstance(val, (int, float)) else val
+        return float(val)
     except (ValueError, TypeError):
-        return default
+        return val  # return string values (e.g. hvac_action) as-is
 
 
 def _eval_zone(zone_name):
