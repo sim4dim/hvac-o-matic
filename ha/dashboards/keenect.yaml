@@ -630,7 +630,7 @@ views:
         entities:
           - entity: input_number.furnace_btu_input
             name: Furnace BTU/h
-          - entity: input_number.gas_price_per_therm
+          - entity: input_number.gas_rate_per_therm
             name: Gas $/therm
           - entity: input_number.ac_wattage
             name: AC Wattage

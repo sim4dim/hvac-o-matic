@@ -1201,7 +1201,7 @@ def _all_idle():
 # ---------------------------------------------------------------------------
 # Input BTU/h: high=88000, low=60000. Default to low fire (most common).
 # Cost = input_BTU/h × hours / 100,000 BTU/therm × $/therm
-FURNACE_BTU_DEFAULT = 60000  # low fire input
+FURNACE_BTU_DEFAULT = 82400  # G61MPV ~80% high fire average
 
 def _track_cost():
     """Accumulate runtime and cost each eval cycle when HVAC is active."""
@@ -1218,7 +1218,7 @@ def _track_cost():
     mode = _hvac_mode()
     if mode == "HEAT":
         btu = _float("input_number.furnace_btu_input", FURNACE_BTU_DEFAULT)
-        price = _float("input_number.gas_price_per_therm", 1.00)
+        price = _float("input_number.gas_rate_per_therm", 1.00)
         cost = (btu * elapsed_h / 100000.0) * price
         _st["heat_runtime"] += elapsed_h
         _st["heat_cost"] += cost
@@ -2061,11 +2061,11 @@ def update_gas_price():
         if price < 0.10 or price > 5.00:
             log.warning(f"keenect: gas price ${price} outside valid range, skipping")
             return
-        current = _float("input_number.gas_price_per_therm", 0)
+        current = _float("input_number.gas_rate_per_therm", 0)
         if abs(current - price) < 0.001:
             log.info(f"keenect: gas price unchanged at ${price}/CCF")
             return
-        input_number.set_value(entity_id="input_number.gas_price_per_therm", value=price)
+        input_number.set_value(entity_id="input_number.gas_rate_per_therm", value=price)
         log.info(f"keenect: updated gas price ${current}→${price}/CCF from MI gas comparison")
     except Exception as e:
         log.error(f"keenect: failed to fetch gas price: {e}")
