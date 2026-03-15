@@ -1061,12 +1061,21 @@ def _calc_opening(zone_name, zstate, temp, setpoint):
 # Zone evaluation
 # ---------------------------------------------------------------------------
 def _get_climate_attr(entity_id, attr, default=None):
-    """Read a climate entity attribute."""
+    """Read a climate entity attribute. Tries multiple pyscript access methods."""
+    val = None
     try:
-        # Use pyscript direct attribute access: state.get("entity.attr")
+        # Method 1: pyscript direct attribute access
         val = state.get(f"{entity_id}.{attr}")
     except Exception:
-        return default
+        pass
+    if val is None:
+        try:
+            # Method 2: getattr dict access (fallback for climate_template)
+            attrs = state.getattr(entity_id)
+            if attrs:
+                val = attrs.get(attr)
+        except Exception:
+            pass
     if val is None:
         return default
     try:
