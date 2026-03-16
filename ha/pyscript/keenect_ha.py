@@ -1002,8 +1002,11 @@ def _verify_vents():
                 if target == 0 and s == "off":
                     continue  # correct
                 if target > 0 and s == "on":
-                    attrs = state.getattr(vent_id)
-                    bri = int(attrs.get("brightness", 0))
+                    bri = state.get(f"{vent_id}.brightness")
+                    if bri is None:
+                        attrs = state.getattr(vent_id)
+                        bri = attrs.get("brightness", 0) if attrs else 0
+                    bri = int(bri)
                     actual_pct = round(bri * 100 / 255) if bri else 0
                     if abs(actual_pct - target) <= 10:
                         continue  # close enough
@@ -1484,8 +1487,10 @@ def _update_status():
                 try:
                     s = state.get(vent_id)
                     if s == "on":
-                        attrs = state.getattr(vent_id)
-                        bri = attrs.get("brightness", 0)
+                        bri = state.get(f"{vent_id}.brightness")
+                        if bri is None:
+                            attrs = state.getattr(vent_id)
+                            bri = attrs.get("brightness", 0) if attrs else 0
                         pct = round(int(bri) * 100 / 255) if bri else 0
                         level = max(level, pct)
                 except Exception:
@@ -1543,8 +1548,10 @@ def _check_vent_health():
                     continue
 
                 # Check staleness via last_updated timestamp
-                attrs = state.getattr(sensor_id)
-                last_updated = attrs.get("last_updated")
+                last_updated = state.get(f"{sensor_id}.last_updated")
+                if last_updated is None:
+                    attrs = state.getattr(sensor_id)
+                    last_updated = attrs.get("last_updated") if attrs else None
                 if last_updated is None:
                     continue
 
