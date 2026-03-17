@@ -197,10 +197,26 @@ globals:
 mqtt:
   broker: 192.168.1.10
   discovery: false
-  on_message:
+  on_json_message:
     - topic: keenect/heartbeat
       then:
-        - lambda: 'id(last_heartbeat) = millis();'
+        - lambda: |-
+            id(last_heartbeat) = millis();
+            // Sync relay state from keenect on boot or reconnect
+            bool want_heat = x["heat"] | false;
+            bool want_cool = x["cool"] | false;
+            bool want_fan  = x["fan"]  | false;
+            // Only apply if in ESP32 control mode (not bypass/watchdog)
+            if (id(watchdog_tripped)) return;
+            if (id(bypass_sw).state) return;
+            auto set_sw = [](switch_::Switch *sw, bool want) {
+              if (sw->state != want) {
+                if (want) sw->turn_on(); else sw->turn_off();
+              }
+            };
+            set_sw(id(heat_sw), want_heat);
+            set_sw(id(cool_sw), want_cool);
+            set_sw(id(fan_sw), want_fan);
 
 # ---------------------------------------------------------------------------
 # Watchdog: enter bypass after 60 min with no API connection

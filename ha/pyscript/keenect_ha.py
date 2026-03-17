@@ -2521,14 +2521,21 @@ def check_anomalies():
 
 @time_trigger("period(now, 60s)")
 def keenect_heartbeat():
-    """Publish MQTT heartbeat for ESPHome watchdog."""
+    """Publish MQTT heartbeat with HVAC state for ESPHome sync on boot."""
     import subprocess
+    mode = _hvac_mode()
+    payload = json_mod.dumps({
+        "heat": _st.get("hvac_on", False) and mode == "HEAT",
+        "cool": _st.get("hvac_on", False) and mode == "COOL",
+        "fan": _st.get("hvac_on", False) or _st.get("recirc_active", False),
+    }, separators=(',', ':'))
     try:
-        mqtt.publish(topic="keenect/heartbeat", payload="alive", qos=0)
+        mqtt.publish(topic="keenect/heartbeat", payload=payload, qos=1, retain=True)
     except Exception:
         try:
             task.executor(subprocess.run,
-                          ["mosquitto_pub", "-h", "192.168.1.10", "-t", "keenect/heartbeat", "-m", "alive"],
+                          ["mosquitto_pub", "-h", "192.168.1.10", "-t", "keenect/heartbeat",
+                           "-m", payload, "-r", "-q", "1"],
                           timeout=5)
         except Exception as e:
             log.warning(f"keenect: heartbeat publish failed: {e}")
