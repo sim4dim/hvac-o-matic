@@ -1013,6 +1013,9 @@ def _verify_vents():
                 # Mismatch - clear cache so next eval retries
                 log.warning(f"keenect: vent {vent_id} target={target} actual={s}, clearing cache to retry")
                 del _st["vent_levels"][key]
+                if target == 0 and s != "off":
+                    log.warning(f"keenect: vent {vent_id} reconnected open during IDLE, forcing close")
+                    _set_vent(zn, 0)
             except Exception as e:
                 log.debug(f"keenect: verify vent {vent_id}: {e}")
 

@@ -195,7 +195,7 @@ globals:
 # MQTT - heartbeat subscriber for keenect watchdog
 # ---------------------------------------------------------------------------
 mqtt:
-  broker: 192.168.1.10
+  broker: !secret mqtt_broker
   discovery: false
   on_json_message:
     - topic: keenect/heartbeat

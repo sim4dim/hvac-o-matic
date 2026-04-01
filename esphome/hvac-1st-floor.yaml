@@ -16,6 +16,7 @@ esp32:
 wifi:
   ssid: !secret hvac_wifi_ssid
   password: !secret hvac_wifi_password
+  # Configure these for your network
   manual_ip:
     static_ip: 192.168.1.63
     gateway: 192.168.1.1
