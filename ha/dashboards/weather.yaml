@@ -1,0 +1,346 @@
+title: Weather
+views:
+  - title: Now
+    path: now
+    icon: mdi:weather-partly-cloudy
+    type: panel
+    cards:
+      - type: vertical-stack
+        cards:
+
+          # ============================================================
+          # ROW 1: HERO + chip strip (one unified panel, full width)
+          # ============================================================
+          - type: custom:stack-in-card
+            cards:
+              - type: custom:mushroom-template-card
+                primary: >-
+                  {{ states('sensor.weewx_outdoor_temperature') | round(0) }}°F · feels {{
+                  iif(state_attr('weather.forecast_home','apparent_temperature') is not none,
+                      state_attr('weather.forecast_home','apparent_temperature') | round(0),
+                      states('sensor.weewx_dewpoint_3') | round(0)) }}°
+                secondary: >-
+                  {% set t = states('sensor.weewx_outdoor_temperature') | float(0) %}
+                  {% set d = states('sensor.weewx_dewpoint_3') | float(0) %}
+                  {% set w = states('sensor.weewx_wind_speed_2') | float(0) %}
+                  {% set cond = states('weather.forecast_home') %}
+                  {% set warmth = 'Cold' if t < 40 else 'Cool' if t < 60 else 'Mild' if t < 75 else 'Warm' if t < 85 else 'Hot' %}
+                  {% set wet = 'dry' if d < 50 else 'comfortable' if d < 60 else 'humid' if d < 65 else 'sticky' if d < 70 else 'oppressive' %}
+                  {% set wind = 'calm' if w < 2 else 'a light breeze' if w < 8 else 'breezy' if w < 15 else 'windy' if w < 25 else 'gusty' %}
+                  {{ warmth }} & {{ wet }}, {{ wind }} · {{ cond | replace('-',' ') | title }}
+                icon: >-
+                  {% set m = {'clear-night':'mdi:weather-night','cloudy':'mdi:weather-cloudy','exceptional':'mdi:weather-tornado','fog':'mdi:weather-fog','hail':'mdi:weather-hail','lightning':'mdi:weather-lightning','lightning-rainy':'mdi:weather-lightning-rainy','partlycloudy':'mdi:weather-partly-cloudy','pouring':'mdi:weather-pouring','rainy':'mdi:weather-rainy','snowy':'mdi:weather-snowy','snowy-rainy':'mdi:weather-snowy-rainy','sunny':'mdi:weather-sunny','windy':'mdi:weather-windy','windy-variant':'mdi:weather-windy-variant'} %}
+                  {{ m.get(states('weather.forecast_home'), 'mdi:weather-partly-cloudy') }}
+                icon_color: >-
+                  {% set t = states('sensor.weewx_outdoor_temperature') | float(0) %}
+                  {{ 'blue' if t < 40 else 'light-blue' if t < 60 else 'green' if t < 75 else 'amber' if t < 85 else 'red' }}
+                tap_action:
+                  action: more-info
+                  entity: weather.forecast_home
+              - type: custom:mushroom-chips-card
+                alignment: center
+                chips:
+                  - type: template
+                    icon: mdi:water-percent
+                    content: "{{ states('sensor.weewx_outdoor_humidity') | round(0) }}%"
+                    icon_color: blue
+                  - type: template
+                    icon: mdi:weather-sunny
+                    content: "UV {{ state_attr('weather.forecast_home','uv_index') | default('—') }}"
+                    icon_color: >-
+                      {% set uv = state_attr('weather.forecast_home','uv_index') | float(0) %}
+                      {{ 'green' if uv < 3 else 'amber' if uv < 6 else 'orange' if uv < 8 else 'red' if uv < 11 else 'purple' }}
+                  - type: template
+                    icon: mdi:cloud
+                    content: "{{ state_attr('weather.forecast_home','cloud_coverage') | round(0) }}%"
+                    icon_color: grey
+                  - type: template
+                    icon: mdi:thermometer-water
+                    content: "Dew {{ states('sensor.weewx_dewpoint_3') | round(0) }}°"
+                    icon_color: teal
+
+          # ============================================================
+          # ROW 2: FOUR equal-prominence outdoor stat tiles
+          #         Wind | Temp/RH | Barometer trend | Rainfall
+          # ============================================================
+          - type: horizontal-stack
+            cards:
+
+              # --- Wind tile (small rose on left, speed/gust on right) ---
+              - type: custom:button-card
+                entity: sensor.weewx_wind_direction
+                show_name: false
+                show_state: false
+                show_icon: false
+                show_label: true
+                label: |
+                  [[[
+                    const dir = parseFloat(states['sensor.weewx_wind_direction'].state);
+                    const spd = parseFloat(states['sensor.weewx_wind_speed_2'].state);
+                    const gust = parseFloat(states['sensor.weewx_wind_gust_2'].state);
+                    const dirs = ['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];
+                    const card = isNaN(dir) ? '—' : dirs[Math.round(dir/22.5) % 16];
+                    return `<div style="font-size:17px;font-weight:600;line-height:1.2;color:var(--primary-text-color);">${spd.toFixed(1)} mph ${card}</div><div style="font-size:13px;color:var(--secondary-text-color);margin-top:2px;">gust ${gust.toFixed(1)} mph</div>`;
+                  ]]]
+                styles:
+                  card:
+                    - padding: 12px 16px
+                    - background: var(--ha-card-background)
+                    - box-shadow: var(--ha-card-box-shadow)
+                    - border-radius: var(--ha-card-border-radius, 12px)
+                    - height: 88px
+                  grid:
+                    - grid-template-columns: 64px 1fr
+                    - grid-template-areas: '"rose label"'
+                    - gap: 12px
+                    - align-items: center
+                  custom_fields:
+                    rose:
+                      - grid-area: rose
+                      - display: flex
+                      - align-items: center
+                      - justify-content: center
+                  label:
+                    - grid-area: label
+                    - margin: 0
+                    - white-space: normal
+                    - text-align: left
+                custom_fields:
+                  rose: |
+                    [[[
+                      const dir = parseFloat(states['sensor.weewx_wind_direction'].state);
+                      const angle = isNaN(dir) ? 0 : dir;
+                      const ticks = [...Array(8)].map((_, i) => {
+                        const a = i * 45 * Math.PI / 180;
+                        const r1 = 28, r2 = 24;
+                        const x1 = 32 + r1 * Math.sin(a), y1 = 32 - r1 * Math.cos(a);
+                        const x2 = 32 + r2 * Math.sin(a), y2 = 32 - r2 * Math.cos(a);
+                        return `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="var(--divider-color)" stroke-width="1"/>`;
+                      }).join('');
+                      return `<svg width="64" height="64" viewBox="0 0 64 64">
+                        <circle cx="32" cy="32" r="29" fill="none" stroke="var(--divider-color)" stroke-width="1.2"/>
+                        ${ticks}
+                        <text x="32" y="9"  text-anchor="middle" font-size="8" font-weight="bold" fill="var(--primary-text-color)">N</text>
+                        <text x="60" y="35" text-anchor="middle" font-size="8" font-weight="bold" fill="var(--primary-text-color)">E</text>
+                        <text x="32" y="61" text-anchor="middle" font-size="8" font-weight="bold" fill="var(--primary-text-color)">S</text>
+                        <text x="4"  y="35" text-anchor="middle" font-size="8" font-weight="bold" fill="var(--primary-text-color)">W</text>
+                        <g transform="rotate(${angle} 32 32)" style="transition: transform 1s ease;">
+                          <polygon points="32,10 27,36 32,31 37,36" fill="var(--primary-color)"/>
+                          <circle cx="32" cy="32" r="2.5" fill="var(--primary-color)"/>
+                        </g>
+                      </svg>`;
+                    ]]]
+
+              # --- Outdoor Temp / Humidity tile ---
+              - type: custom:mushroom-template-card
+                primary: >-
+                  {{ states('sensor.weewx_outdoor_temperature') | round(1) }}°F · {{ states('sensor.weewx_outdoor_humidity') | round(0) }}% RH
+                secondary: >-
+                  {% set t = states('sensor.weewx_outdoor_temperature') | float(0) %}
+                  {% set d = states('sensor.weewx_dewpoint_3') | float(0) %}
+                  {% set warmth = 'Cold' if t < 40 else 'Cool' if t < 60 else 'Mild' if t < 75 else 'Warm' if t < 85 else 'Hot' %}
+                  {% set wet = 'dry' if d < 50 else 'comfortable' if d < 60 else 'humid' if d < 65 else 'sticky' if d < 70 else 'oppressive' %}
+                  {{ warmth }} & {{ wet }} · dew {{ d | round(0) }}°
+                icon: mdi:thermometer
+                icon_color: >-
+                  {% set t = states('sensor.weewx_outdoor_temperature') | float(0) %}
+                  {{ 'blue' if t < 40 else 'light-blue' if t < 60 else 'green' if t < 75 else 'amber' if t < 85 else 'red' }}
+
+              # --- Barometer + trend tile ---
+              - type: custom:mushroom-template-card
+                primary: "{{ states('sensor.weewx_barometer_2') }} inHg"
+                secondary: >-
+                  {% set t = states('sensor.weewx_barometer_trend_3h') | float(0) %}
+                  {% set arrow = '▲▲' if t > 0.06 else '▲' if t > 0.02 else '▼▼' if t < -0.06 else '▼' if t < -0.02 else '→' %}
+                  {% set word = 'Rising fast' if t > 0.06 else 'Rising' if t > 0.02 else 'Falling fast' if t < -0.06 else 'Falling' if t < -0.02 else 'Steady' %}
+                  {{ arrow }} {{ word }} ({{ '%+0.3f' % t }} / 3h)
+                icon: mdi:gauge
+                icon_color: >-
+                  {% set t = states('sensor.weewx_barometer_trend_3h') | float(0) %}
+                  {{ 'red' if t < -0.06 else 'orange' if t < -0.02 else 'green' if t > 0.02 else 'grey' }}
+
+              # --- Rainfall tile ---
+              - type: custom:mushroom-template-card
+                primary: "{{ states('sensor.weewx_rain_today') }} in today"
+                secondary: >-
+                  {% set r = states('sensor.weewx_rain_rate_2') | float(0) %}
+                  {% if r == 0 %}No rain falling{% elif r < 0.1 %}Light · {{ r }} in/h{% elif r < 0.3 %}Moderate · {{ r }} in/h{% else %}Heavy · {{ r }} in/h{% endif %}
+                icon: mdi:weather-rainy
+                icon_color: >-
+                  {% set r = states('sensor.weewx_rain_rate_2') | float(0) %}
+                  {{ 'blue' if r > 0 else 'grey' }}
+
+          # ============================================================
+          # ROW 3: Indoor reading + window suggestion
+          # ============================================================
+          - type: horizontal-stack
+            cards:
+              - type: custom:mushroom-template-card
+                primary: >-
+                  Indoor {{ states('sensor.ecowitt_indoor_temperature') | round(1) }}°F · {{ states('sensor.ecowitt_indoor_humidity') | round(0) }}% RH
+                secondary: >-
+                  {% set i_t = states('sensor.ecowitt_indoor_temperature') | float(0) %}
+                  {% set i_rh = states('sensor.ecowitt_indoor_humidity') | float(50) %}
+                  {% set i_tc = (i_t - 32) * 5 / 9 %}
+                  {% set alpha = (17.27 * i_tc) / (237.7 + i_tc) + (i_rh / 100) | log %}
+                  {% set i_dp = ((237.7 * alpha) / (17.27 - alpha)) * 9 / 5 + 32 %}
+                  Indoor dewpoint {{ i_dp | round(0) }}°F
+                icon: mdi:home
+                icon_color: amber
+              - type: custom:mushroom-template-card
+                primary: >-
+                  {% set o_t  = states('sensor.weewx_outdoor_temperature') | float(0) %}
+                  {% set i_t  = states('sensor.ecowitt_indoor_temperature') | float(0) %}
+                  {% set o_dp = states('sensor.weewx_dewpoint_3') | float(0) %}
+                  {% set i_rh = states('sensor.ecowitt_indoor_humidity') | float(50) %}
+                  {# Indoor dewpoint via simple Magnus-formula approximation in °F.
+                     Convert to °C, compute Td_C, convert back. #}
+                  {% set i_tc = (i_t - 32) * 5 / 9 %}
+                  {% set a = 17.27 %}
+                  {% set b = 237.7 %}
+                  {% set alpha = (a * i_tc) / (b + i_tc) + (i_rh / 100) | log %}
+                  {% set i_dp_c = (b * alpha) / (a - alpha) %}
+                  {% set i_dp = i_dp_c * 9 / 5 + 32 %}
+                  {% set o_rh = states('sensor.weewx_outdoor_humidity') | float(0) %}
+                  {% set dp_diff = o_dp - i_dp %}
+                  {% if dp_diff < -3 and o_t < i_t and o_rh < 75 %}Open the windows
+                  {%- elif dp_diff > 2 or o_rh > 80 %}Keep windows closed
+                  {%- elif o_t < i_t %}Cool but humid — judgment call
+                  {%- else %}No comfort gain{% endif %}
+                secondary: >-
+                  {% set o_t  = states('sensor.weewx_outdoor_temperature') | float(0) %}
+                  {% set i_t  = states('sensor.ecowitt_indoor_temperature') | float(0) %}
+                  {% set o_dp = states('sensor.weewx_dewpoint_3') | float(0) %}
+                  {% set i_rh = states('sensor.ecowitt_indoor_humidity') | float(50) %}
+                  {% set i_tc = (i_t - 32) * 5 / 9 %}
+                  {% set alpha = (17.27 * i_tc) / (237.7 + i_tc) + (i_rh / 100) | log %}
+                  {% set i_dp = ((237.7 * alpha) / (17.27 - alpha)) * 9 / 5 + 32 %}
+                  Dewpoint out {{ o_dp | round(0) }}° vs in {{ i_dp | round(0) }}° · {{ '%+0.1f' % (o_t - i_t) }}°F temp diff
+                icon: mdi:window-open-variant
+                icon_color: >-
+                  {% set o_t  = states('sensor.weewx_outdoor_temperature') | float(0) %}
+                  {% set i_t  = states('sensor.ecowitt_indoor_temperature') | float(0) %}
+                  {% set o_dp = states('sensor.weewx_dewpoint_3') | float(0) %}
+                  {% set i_rh = states('sensor.ecowitt_indoor_humidity') | float(50) %}
+                  {% set o_rh = states('sensor.weewx_outdoor_humidity') | float(0) %}
+                  {% set i_tc = (i_t - 32) * 5 / 9 %}
+                  {% set alpha = (17.27 * i_tc) / (237.7 + i_tc) + (i_rh / 100) | log %}
+                  {% set i_dp = ((237.7 * alpha) / (17.27 - alpha)) * 9 / 5 + 32 %}
+                  {% set dp_diff = o_dp - i_dp %}
+                  {% if dp_diff < -3 and o_t < i_t and o_rh < 75 %}green
+                  {%- elif dp_diff > 2 or o_rh > 80 %}red
+                  {%- else %}grey{% endif %}
+
+          # ============================================================
+          # ROW 3: FORECAST  (full width)
+          # ============================================================
+          - type: custom:stack-in-card
+            cards:
+              - type: weather-forecast
+                entity: weather.forecast_home
+                forecast_type: daily
+                show_current: false
+                show_forecast: true
+
+          # ============================================================
+          # ROW 4: 24h TRENDS — two charts side-by-side
+          # ============================================================
+          - type: horizontal-stack
+            cards:
+              - type: custom:apexcharts-card
+                header:
+                  show: true
+                  title: Temperature & Humidity (24h)
+                  show_states: true
+                  colorize_states: true
+                graph_span: 24h
+                span:
+                  end: minute
+                apex_config:
+                  chart:
+                    height: 280
+                  legend:
+                    position: bottom
+                yaxis:
+                  - id: temp
+                    decimals: 0
+                    apex_config:
+                      title: { text: "°F" }
+                  - id: rh
+                    opposite: true
+                    min: 0
+                    max: 100
+                    decimals: 0
+                    apex_config:
+                      title: { text: "% RH" }
+                series:
+                  - entity: sensor.weewx_outdoor_temperature
+                    name: Outdoor temp
+                    yaxis_id: temp
+                    stroke_width: 2
+                    curve: smooth
+                    color: '#1f77b4'
+                  - entity: sensor.weewx_dewpoint_3
+                    name: Dewpoint
+                    yaxis_id: temp
+                    stroke_width: 2
+                    curve: smooth
+                    color: '#2ca02c'
+                    opacity: 0.5
+                  - entity: sensor.ecowitt_indoor_temperature
+                    name: Indoor temp
+                    yaxis_id: temp
+                    stroke_width: 1
+                    curve: smooth
+                    color: '#ff7f0e'
+                    opacity: 0.6
+                  - entity: sensor.weewx_outdoor_humidity
+                    name: Outdoor RH
+                    yaxis_id: rh
+                    stroke_width: 1
+                    curve: smooth
+                    color: '#9467bd'
+                    opacity: 0.4
+              - type: custom:apexcharts-card
+                header:
+                  show: true
+                  title: Wind & Rain (24h)
+                  show_states: true
+                  colorize_states: true
+                graph_span: 24h
+                apex_config:
+                  chart:
+                    height: 280
+                    stacked: false
+                  legend:
+                    position: bottom
+                yaxis:
+                  - id: wind
+                    decimals: 0
+                    apex_config:
+                      title: { text: "mph" }
+                  - id: rain
+                    opposite: true
+                    decimals: 2
+                    apex_config:
+                      title: { text: "in/h" }
+                series:
+                  - entity: sensor.weewx_wind_speed_2
+                    name: Wind
+                    yaxis_id: wind
+                    curve: smooth
+                    color: '#17becf'
+                  - entity: sensor.weewx_wind_gust_2
+                    name: Gust
+                    yaxis_id: wind
+                    curve: smooth
+                    stroke_width: 1
+                    opacity: 0.5
+                    color: '#bcbd22'
+                  - entity: sensor.weewx_rain_rate_2
+                    name: Rain rate
+                    yaxis_id: rain
+                    type: area
+                    curve: stepline
+                    color: '#1f77b4'
+                    opacity: 0.5
