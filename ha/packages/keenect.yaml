@@ -40,6 +40,7 @@ input_number:
     min: 30
     max: 70
     step: 1
+    initial: 50
     unit_of_measurement: "°F"
     icon: mdi:snowflake-alert
 

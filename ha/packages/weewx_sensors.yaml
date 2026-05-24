@@ -1,0 +1,153 @@
+# WeeWX → Home Assistant MQTT sensors
+# Source: AcuRite Iris 5-in-1 via WeeWX on Pi (192.168.1.189)
+# Topics: weather (5 min archive), weather/loop (48s loop — used here for low latency)
+# All JSON values are strings; extracted and cast to float via value_template.
+
+mqtt:
+  sensor:
+    - name: "WeeWX Outdoor Temperature"
+      unique_id: weewx_outdoor_temperature
+      state_topic: "weather/loop"
+      value_template: "{{ value_json.outTemp_F | float | round(1) }}"
+      unit_of_measurement: "°F"
+      device_class: temperature
+      state_class: measurement
+      availability:
+        - topic: "weather/loop"
+          value_template: "{{ 'online' if value_json.outTemp_F is defined else 'offline' }}"
+
+    - name: "WeeWX Outdoor Humidity"
+      unique_id: weewx_outdoor_humidity
+      state_topic: "weather/loop"
+      value_template: "{{ value_json.outHumidity | float | round(1) }}"
+      unit_of_measurement: "%"
+      device_class: humidity
+      state_class: measurement
+      availability:
+        - topic: "weather/loop"
+          value_template: "{{ 'online' if value_json.outHumidity is defined else 'offline' }}"
+
+    - name: "WeeWX Indoor Temperature"
+      unique_id: weewx_indoor_temperature
+      state_topic: "weather/loop"
+      value_template: "{{ value_json.inTemp_F | float | round(1) }}"
+      unit_of_measurement: "°F"
+      device_class: temperature
+      state_class: measurement
+      availability:
+        - topic: "weather/loop"
+          value_template: "{{ 'online' if value_json.inTemp_F is defined else 'offline' }}"
+
+    # NOTE: WeeWX AcuRite driver has known FIXME at /usr/share/weewx/weewx/drivers/acurite.py:361
+    # — it does not decode indoor humidity from R3 messages. inHumidity is always None.
+    # Use Ecowitt GW1100 indoor_humidity instead (defined below).
+
+    # Ecowitt GW1100 indoor sensors — published continuously by gw1000_mqtt.py
+    - name: "Ecowitt Indoor Humidity"
+      unique_id: ecowitt_indoor_humidity
+      state_topic: "ecowitt/gw1000"
+      value_template: "{{ value_json.indoor_humidity | float | round(1) }}"
+      unit_of_measurement: "%"
+      device_class: humidity
+      state_class: measurement
+      availability:
+        - topic: "ecowitt/gw1000"
+          value_template: "{{ 'online' if value_json.indoor_humidity is defined else 'offline' }}"
+
+    - name: "Ecowitt Indoor Temperature"
+      unique_id: ecowitt_indoor_temperature
+      state_topic: "ecowitt/gw1000"
+      value_template: "{{ value_json.indoor_temp_f | float | round(1) }}"
+      unit_of_measurement: "°F"
+      device_class: temperature
+      state_class: measurement
+      availability:
+        - topic: "ecowitt/gw1000"
+          value_template: "{{ 'online' if value_json.indoor_temp_f is defined else 'offline' }}"
+
+    - name: "WeeWX Pressure"
+      unique_id: weewx_pressure
+      state_topic: "weather/loop"
+      value_template: "{{ value_json.pressure_inHg | float | round(3) }}"
+      unit_of_measurement: "inHg"
+      device_class: pressure
+      state_class: measurement
+      availability:
+        - topic: "weather/loop"
+          value_template: "{{ 'online' if value_json.pressure_inHg is defined else 'offline' }}"
+
+    - name: "WeeWX Barometer"
+      unique_id: weewx_barometer
+      state_topic: "weather/loop"
+      value_template: "{{ value_json.barometer_inHg | float | round(3) }}"
+      unit_of_measurement: "inHg"
+      device_class: pressure
+      state_class: measurement
+      availability:
+        - topic: "weather/loop"
+          value_template: "{{ 'online' if value_json.barometer_inHg is defined else 'offline' }}"
+
+    - name: "WeeWX Dewpoint"
+      unique_id: weewx_dewpoint
+      state_topic: "weather/loop"
+      value_template: "{{ value_json.dewpoint_F | float | round(1) }}"
+      unit_of_measurement: "°F"
+      device_class: temperature
+      state_class: measurement
+      availability:
+        - topic: "weather/loop"
+          value_template: "{{ 'online' if value_json.dewpoint_F is defined else 'offline' }}"
+
+    - name: "WeeWX Wind Speed"
+      unique_id: weewx_wind_speed
+      state_topic: "weather/loop"
+      value_template: "{{ value_json.windSpeed_mph | float | round(1) }}"
+      unit_of_measurement: "mph"
+      device_class: wind_speed
+      state_class: measurement
+      availability:
+        - topic: "weather/loop"
+          value_template: "{{ 'online' if value_json.windSpeed_mph is defined else 'offline' }}"
+
+    - name: "WeeWX Wind Gust"
+      unique_id: weewx_wind_gust
+      state_topic: "weather/loop"
+      value_template: "{{ value_json.windGust_mph | float | round(1) }}"
+      unit_of_measurement: "mph"
+      device_class: wind_speed
+      state_class: measurement
+      availability:
+        - topic: "weather/loop"
+          value_template: "{{ 'online' if value_json.windGust_mph is defined else 'offline' }}"
+
+    - name: "WeeWX Wind Direction"
+      unique_id: weewx_wind_direction
+      state_topic: "weather/loop"
+      value_template: "{{ value_json.windDir | float | round(0) }}"
+      unit_of_measurement: "°"
+      state_class: measurement
+      availability:
+        - topic: "weather/loop"
+          value_template: "{{ 'online' if value_json.windDir is defined else 'offline' }}"
+
+    - name: "WeeWX Rain Rate"
+      unique_id: weewx_rain_rate
+      state_topic: "weather/loop"
+      value_template: "{{ value_json.rainRate_inch_per_hour | float | round(3) }}"
+      unit_of_measurement: "in/h"
+      device_class: precipitation_intensity
+      state_class: measurement
+      availability:
+        - topic: "weather/loop"
+          value_template: "{{ 'online' if value_json.rainRate_inch_per_hour is defined else 'offline' }}"
+
+    - name: "WeeWX Rain Today"
+      unique_id: weewx_rain_today
+      state_topic: "weather/loop"
+      value_template: "{{ value_json.dayRain_in | float | round(3) }}"
+      unit_of_measurement: "in"
+      device_class: precipitation
+      state_class: total_increasing
+      availability:
+        - topic: "weather/loop"
+          value_template: "{{ 'online' if value_json.dayRain_in is defined else 'offline' }}"

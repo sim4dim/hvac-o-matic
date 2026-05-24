@@ -359,7 +359,7 @@ ESPHOME_MIRROR_MAP = {
     7: [("turn_off", "switch.hvac_controller_fan")],
 }
 
-OUTDOOR_TEMP_ENTITY = "sensor.outdoor_temperature"
+OUTDOOR_TEMP_ENTITY = "sensor.weewx_outdoor_temperature"
 
 # Supply/return duct sensors (ESPHome hvac-controller)
 SUPPLY_TEMP_ENTITY = "sensor.hvac_controller_supply_temperature"
@@ -1179,12 +1179,13 @@ def _apply_zone_vents(results):
             else:
                 target = r["heat_sp"]
             opening = _calc_opening(zone_name, op, temp, target)
-            # During warmup, cap vents at minimum to avoid blowing unconditioned air
-            if warming_up and op in ("HEATING", "COOLING"):
+            # Heat mode only: cap vents at minimum during warmup to avoid pushing
+            # cold air through ducts before the heat exchanger is up to temp.
+            # Cool mode does not need this: AC coil cools within seconds of compressor start.
+            if warming_up and op == "HEATING":
                 zone = ZONES[zone_name]
-                min_vo = zone["heat_min_vo"] if op == "HEATING" else zone["cool_min_vo"]
-                if opening > min_vo:
-                    opening = min_vo
+                if opening > zone["heat_min_vo"]:
+                    opening = zone["heat_min_vo"]
             _set_vent(zone_name, opening)
         elif op == "IDLE" and old != "IDLE":
             # Zone just went idle — check others using the COMPLETE new state picture

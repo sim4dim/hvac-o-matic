@@ -1,0 +1,20 @@
+# Outdoor temperature template sensor — pulls from met.no (weather.forecast_home).
+# Stopgap until a real outdoor sensor is added. Replaces the dead Logia-fed
+# sensor.outdoor_temperature that pyscript's cool-lockout was reading.
+#
+# Trigger-based template (re-evaluates on weather state change + every minute)
+# to guarantee fresh reads instead of relying on state_attr auto-tracking.
+template:
+  - trigger:
+      - platform: state
+        entity_id: weather.forecast_home
+      - platform: time_pattern
+        minutes: "/1"
+    sensor:
+      - name: "Outdoor Temperature Met"
+        unique_id: outdoor_temperature_met
+        unit_of_measurement: "°F"
+        device_class: temperature
+        state_class: measurement
+        state: "{{ state_attr('weather.forecast_home', 'temperature') | float(0) }}"
+        availability: "{{ state_attr('weather.forecast_home', 'temperature') is not none }}"
