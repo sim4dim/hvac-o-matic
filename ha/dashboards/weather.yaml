@@ -344,3 +344,33 @@ views:
                     curve: stepline
                     color: '#1f77b4'
                     opacity: 0.5
+
+          # Barometer — full width, 48h span. Slow-moving curve benefits
+          # from the extra horizontal space + longer time window than the
+          # two charts above.
+          - type: custom:apexcharts-card
+            header:
+              show: true
+              title: Barometric Pressure (48h)
+              show_states: true
+              colorize_states: true
+            graph_span: 48h
+            span:
+              end: minute
+            apex_config:
+              chart:
+                height: 220
+              legend:
+                position: bottom
+            yaxis:
+              - id: p
+                decimals: 2
+                apex_config:
+                  title: { text: "inHg" }
+            series:
+              - entity: sensor.weewx_barometer_2
+                name: Sea-level pressure
+                yaxis_id: p
+                stroke_width: 2
+                curve: smooth
+                color: '#9467bd'
