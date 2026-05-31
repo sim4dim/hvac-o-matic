@@ -1360,6 +1360,15 @@ def _eval_master():
         if _st["hvac_on"] and not _st["recirc_active"]:
             log.info("keenect: all idle, shutting HVAC off")
             _hvac_turn_off()
+        elif not _st["hvac_on"] and not _st["recirc_active"] and not _circ_enabled():
+            # Idle reconciliation: if HVAC is off and no circ/recirc, ensure vents are
+            # closed. This self-heals states where vents were left open by sensor-failure
+            # neutral positioning (SENSOR_FAIL_NEUTRAL) after sensors recovered.
+            open_vents = [k for k, v in _st["vent_levels"].items() if v > 0]
+            if open_vents:
+                log.info(f"keenect: idle reconciliation - closing vents left open: {open_vents}")
+                _close_all_vents()
+                _st["vents_closed_after_off"] = True
 
     # Check delayed vent closure timer
     _check_vent_closure_timer(now)
