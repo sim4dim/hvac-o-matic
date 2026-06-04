@@ -92,7 +92,7 @@ climate:
     name: "Gene's Room"
     unique_id: gene_thermostat
     precision: 0.1
-    modes:
+    hvac_modes:
       - "heat"
       - "cool"
       - "off"
@@ -148,7 +148,7 @@ climate:
     name: "Ben's Room"
     unique_id: ben_thermostat
     precision: 0.1
-    modes:
+    hvac_modes:
       - "heat"
       - "cool"
       - "off"
@@ -203,7 +203,7 @@ climate:
     name: "Master Bedroom"
     unique_id: mbr_thermostat
     precision: 0.1
-    modes:
+    hvac_modes:
       - "heat"
       - "cool"
       - "off"
@@ -258,7 +258,7 @@ climate:
     name: "First Floor"
     unique_id: first_floor_thermostat
     precision: 0.1
-    modes:
+    hvac_modes:
       - "heat"
       - "cool"
       - "off"
