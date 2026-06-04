@@ -233,9 +233,13 @@ views:
                     ]]]
                   speed: |
                     [[[
-                      const dir = parseFloat(states['sensor.weewx_wind_direction'].state) || 0;
                       const spd = parseFloat(states['sensor.weewx_wind_speed_2'].state) || 0;
                       const gust = parseFloat(states['sensor.weewx_wind_gust_2'].state) || 0;
+                      const calm = isNaN(spd) || spd < 0.5;
+                      if (calm) {
+                        return 'CALM<br><span style="font-size:13px;font-weight:700;color:#000;">gust ' + Math.round(gust) + '</span>';
+                      }
+                      const dir = parseFloat(states['sensor.weewx_wind_direction'].state) || 0;
                       const dirs = ['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];
                       const card = dirs[Math.round(dir / 22.5) % 16];
                       return Math.round(spd) + ' MPH ' + card + '<br><span style="font-size:13px;font-weight:700;color:#000;">gust ' + Math.round(gust) + '</span>';

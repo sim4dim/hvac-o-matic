@@ -79,8 +79,10 @@ views:
                     const spd = parseFloat(states['sensor.weewx_wind_speed_2'].state);
                     const gust = parseFloat(states['sensor.weewx_wind_gust_2'].state);
                     const dirs = ['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];
-                    const card = isNaN(dir) ? '—' : dirs[Math.round(dir/22.5) % 16];
-                    return `<div style="font-size:17px;font-weight:600;line-height:1.2;color:var(--primary-text-color);">${spd.toFixed(1)} mph ${card}</div><div style="font-size:13px;color:var(--secondary-text-color);margin-top:2px;">gust ${gust.toFixed(1)} mph</div>`;
+                    const calm = isNaN(spd) || spd < 0.5;
+                    const card = calm ? 'calm' : (isNaN(dir) ? '—' : dirs[Math.round(dir/22.5) % 16]);
+                    const spdStr = calm ? '0.0' : spd.toFixed(1);
+                    return `<div style="font-size:17px;font-weight:600;line-height:1.2;color:var(--primary-text-color);">${spdStr} mph ${card}</div><div style="font-size:13px;color:var(--secondary-text-color);margin-top:2px;">gust ${gust.toFixed(1)} mph</div>`;
                   ]]]
                 styles:
                   card:
