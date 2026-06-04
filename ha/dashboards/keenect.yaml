@@ -223,7 +223,7 @@ views:
             name: Master BR
           - entity: sensor.gw1000_indoor_temperature
             name: 1st Floor
-          - entity: sensor.outdoor_temperature
+          - entity: sensor.weewx_outdoor_temperature
             name: Outdoor
           - entity: sensor.master_bathroom_temperature_temperature
             name: Master Bath
@@ -246,7 +246,7 @@ views:
             name: Master BR
           - entity: sensor.gw1000_indoor_humidity
             name: 1st Floor
-          - entity: sensor.outdoor_humidity
+          - entity: sensor.weewx_outdoor_humidity
             name: Outdoor
           - entity: sensor.master_bathroom_temperature_humidity
             name: Master Bath

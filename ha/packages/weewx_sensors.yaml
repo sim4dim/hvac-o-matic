@@ -151,3 +151,15 @@ mqtt:
       availability:
         - topic: "weather/loop"
           value_template: "{{ 'online' if value_json.dayRain_in is defined else 'offline' }}"
+
+# Barometer 3-hour trend: derived from canonical MQTT barometer via statistics sensor.
+# entity_id will be sensor.weewx_barometer_trend_3h once the REST duplicate is removed.
+sensor:
+  - platform: statistics
+    name: "WeeWX Barometer Trend 3h"
+    unique_id: weewx_barometer_trend_3h
+    entity_id: sensor.weewx_barometer_2
+    state_characteristic: change
+    max_age:
+      hours: 3
+    sampling_size: 10800

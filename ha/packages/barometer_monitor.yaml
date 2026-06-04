@@ -1,0 +1,209 @@
+# Barometric Pressure & Headache Risk Monitor
+# Place in /config/packages/barometer_monitor.yaml
+#
+# Data sources:
+#   - sensor.weewx_barometer_2 (WeeWX MQTT barometer, updates every loop cycle ~48s)
+#   - sensor.gw1000_barometric_pressure (GW1000 MQTT, updates every 60s)
+#
+# The 3h pressure change uses a statistics sensor sourced from sensor.weewx_barometer_2
+# (defined in weewx_sensors.yaml as sensor.weewx_barometer_trend_3h).
+# HA statistics with the station's ~0.03 inHg resolution are approximate.
+
+template:
+  - sensor:
+      # Tracked pressure: WeWX MQTT barometer → GW1000 MQTT fallback
+      - name: "Barometric Pressure Tracked"
+        unique_id: barometric_pressure_tracked_pkg
+        unit_of_measurement: "inHg"
+        device_class: atmospheric_pressure
+        state_class: measurement
+        state: >
+          {% set weewx_mqtt = states('sensor.weewx_barometer_2') %}
+          {% set gw1000 = states('sensor.gw1000_barometric_pressure') %}
+          {% if weewx_mqtt not in ['unknown', 'unavailable'] and (weewx_mqtt | float(0)) > 25 %}
+            {{ weewx_mqtt | float(0) | round(3) }}
+          {% elif gw1000 not in ['unknown', 'unavailable'] and (gw1000 | float(0)) > 25 %}
+            {{ gw1000 | float(0) | round(3) }}
+          {% else %}
+            {{ 0 }}
+          {% endif %}
+        availability: >
+          {{ (states('sensor.weewx_barometer_2') not in ['unknown', 'unavailable'] and (states('sensor.weewx_barometer_2') | float(0)) > 25)
+             or (states('sensor.gw1000_barometric_pressure') not in ['unknown', 'unavailable'] and (states('sensor.gw1000_barometric_pressure') | float(0)) > 25) }}
+        icon: mdi:gauge
+
+      # 1-hour pressure change from HA statistics
+      # (approximate due to station's ~0.03 inHg resolution steps)
+      - name: "Pressure Change 1h"
+        unique_id: pressure_change_1h_pkg
+        unit_of_measurement: "inHg"
+        device_class: atmospheric_pressure
+        state: >
+          {% set raw = states('sensor.barometric_pressure_tracked_stats_1h') %}
+          {% if raw not in ['unknown', 'unavailable', 'None'] %}
+            {% set change = raw | float(0) %}
+            {% if change | abs > 0.5 %}
+              0
+            {% else %}
+              {{ change | round(3) }}
+            {% endif %}
+          {% else %}
+            0
+          {% endif %}
+        availability: >
+          {{ states('sensor.barometric_pressure_tracked') not in ['unknown', 'unavailable'] }}
+
+      # 3-hour pressure change from statistics sensor
+      # (sensor.weewx_barometer_trend_3h defined in weewx_sensors.yaml)
+      # Falls back to HA statistics if unavailable
+      - name: "Pressure Change 3h"
+        unique_id: pressure_change_3h_pkg
+        unit_of_measurement: "inHg"
+        device_class: atmospheric_pressure
+        state: >
+          {% set weewx = states('sensor.weewx_barometer_trend_3h') %}
+          {% set stats = states('sensor.barometric_pressure_tracked_stats_3h') %}
+          {% if weewx not in ['unknown', 'unavailable', 'None'] %}
+            {{ weewx | float(0) | round(3) }}
+          {% elif stats not in ['unknown', 'unavailable', 'None'] %}
+            {% set change = stats | float(0) %}
+            {% if change | abs > 0.5 %}
+              0
+            {% else %}
+              {{ change | round(3) }}
+            {% endif %}
+          {% else %}
+            0
+          {% endif %}
+        availability: >
+          {{ states('sensor.barometric_pressure_tracked') not in ['unknown', 'unavailable'] }}
+
+      # Trend determination (inHg thresholds: ±0.015 steady, ±0.044 fast)
+      # When 1h stats is 0 (coarse resolution) but 3h is non-zero,
+      # uses 3h_change/3 as hourly rate
+      - name: "Pressure Trend"
+        unique_id: pressure_trend_pkg
+        state: >
+          {% set change_3h = states('sensor.pressure_change_3h') | float(0) %}
+          {% set change_1h = states('sensor.pressure_change_1h') | float(0) %}
+          {% set change = change_3h / 3 if change_1h == 0 and change_3h != 0 else change_1h %}
+          {% if change > 0.044 %}
+            Rising Fast
+          {% elif change > 0.015 %}
+            Rising
+          {% elif change < -0.044 %}
+            Falling Fast
+          {% elif change < -0.015 %}
+            Falling
+          {% else %}
+            Steady
+          {% endif %}
+        icon: >
+          {% set change_3h = states('sensor.pressure_change_3h') | float(0) %}
+          {% set change_1h = states('sensor.pressure_change_1h') | float(0) %}
+          {% set change = change_3h / 3 if change_1h == 0 and change_3h != 0 else change_1h %}
+          {% if change > 0.015 %}
+            mdi:trending-up
+          {% elif change < -0.015 %}
+            mdi:trending-down
+          {% else %}
+            mdi:trending-neutral
+          {% endif %}
+
+      # Headache risk assessment
+      # Thresholds rounded to 0.03 inHg steps (station resolution)
+      # High: >5 hPa drop in 3h (0.15 inHg) or >2 hPa/hr (0.06 inHg)
+      # Moderate: >2 hPa drop in 3h (0.06 inHg) or any detectable 1h drop (0.03 inHg)
+      - name: "Headache Risk"
+        unique_id: headache_risk_pkg
+        state: >
+          {% set change_3h = states('sensor.pressure_change_3h') | float(0) %}
+          {% set change_1h = states('sensor.pressure_change_1h') | float(0) %}
+          {% if change_3h < -0.15 or change_1h < -0.06 %}
+            High
+          {% elif change_3h < -0.06 or change_1h < -0.03 %}
+            Moderate
+          {% else %}
+            Low
+          {% endif %}
+        icon: >
+          {% set risk = this.state %}
+          {% if risk == 'High' %}
+            mdi:head-alert
+          {% elif risk == 'Moderate' %}
+            mdi:head-question
+          {% else %}
+            mdi:head-check
+          {% endif %}
+
+      # Trend duration
+      - name: "Pressure Trend Duration"
+        unique_id: pressure_trend_duration_yaml
+        state: >
+          {% set start = states('input_datetime.pressure_trend_started') %}
+          {% if start not in ['unknown', 'unavailable'] %}
+            {% set start_ts = state_attr('input_datetime.pressure_trend_started', 'timestamp') %}
+            {% if start_ts %}
+              {% set total_minutes = ((as_timestamp(now()) - start_ts) / 60) | int %}
+              {% set hours = (total_minutes / 60) | int %}
+              {% set minutes = total_minutes % 60 %}
+              {% if hours > 0 %}
+                {{ hours }}h {{ minutes }}m
+              {% else %}
+                {{ minutes }}m
+              {% endif %}
+            {% else %}
+              Unknown
+            {% endif %}
+          {% else %}
+            Unknown
+          {% endif %}
+        icon: mdi:timer-outline
+
+      # Numeric headache risk level for graphing (Low=0, Moderate=1, High=2)
+      - name: "Headache Risk Level"
+        unique_id: headache_risk_level_pkg
+        unit_of_measurement: ""
+        state: >
+          {% set risk = states('sensor.headache_risk') %}
+          {% if risk == 'High' %}
+            2
+          {% elif risk == 'Moderate' %}
+            1
+          {% else %}
+            0
+          {% endif %}
+
+      # Reports which pressure source is currently active (for debugging)
+      - name: "Pressure Source"
+        unique_id: pressure_source_pkg
+        state: >
+          {% set weewx_mqtt = states('sensor.weewx_barometer_2') %}
+          {% set gw1000 = states('sensor.gw1000_barometric_pressure') %}
+          {% if weewx_mqtt not in ['unknown', 'unavailable'] and (weewx_mqtt | float(0)) > 25 %}
+            WeWX MQTT
+          {% elif gw1000 not in ['unknown', 'unavailable'] and (gw1000 | float(0)) > 25 %}
+            GW1000
+          {% else %}
+            Unavailable
+          {% endif %}
+        icon: "mdi:information-outline"
+
+# Statistics sensors - kept as secondary/fallback data source
+# Primary 3h trend comes from sensor.weewx_barometer_trend_3h (weewx_sensors.yaml)
+sensor:
+  - platform: statistics
+    name: "Barometric Pressure Tracked Stats 1h"
+    entity_id: sensor.barometric_pressure_tracked
+    state_characteristic: change
+    max_age:
+      hours: 1
+    sampling_size: 3600
+
+  - platform: statistics
+    name: "Barometric Pressure Tracked Stats 3h"
+    entity_id: sensor.barometric_pressure_tracked
+    state_characteristic: change
+    max_age:
+      hours: 3
+    sampling_size: 10800
