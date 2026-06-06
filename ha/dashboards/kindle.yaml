@@ -536,10 +536,24 @@ views:
                       const alpha = (a * i_tc) / (b + i_tc) + Math.log(i_rh / 100);
                       const i_dp = (b * alpha) / (a - alpha) * 9 / 5 + 32;
                       const dp_diff = o_dp - i_dp;
-                      if (dp_diff < -3 && o_t < i_t && o_rh < 75) return 'Open the windows';
-                      if (dp_diff > 2 || o_rh > 80) return 'Keep windows closed';
-                      if (o_t < i_t) return 'Cool but humid — judgment call';
-                      return 'No comfort gain';
+                      const favorable = dp_diff < -3 && o_t < i_t && o_rh < 75;
+                      const humid_closed = dp_diff > 2 || o_rh > 80;
+                      const mode = states['input_select.hvac_mode'] ? states['input_select.hvac_mode'].state : 'OFF';
+                      let text, color;
+                      if (mode === 'COOL') {
+                        if (favorable) { text = 'Open the windows — let the AC rest'; color = 'green'; }
+                        else           { text = 'Keep closed — AC running';            color = 'red';   }
+                      } else if (mode === 'HEAT') {
+                        text = 'Keep closed — heat running'; color = 'red';
+                      } else {
+                        if (favorable)         { text = 'Open the windows';              color = 'green'; }
+                        else if (humid_closed) { text = 'Keep windows closed';           color = 'red';   }
+                        else if (o_t < i_t)   { text = 'Cool but humid — judgment call'; color = '#555'; }
+                        else                  { text = 'No comfort gain';                color = '#555'; }
+                      }
+                      const hvacSuffix = mode === 'COOL' ? ' · AC cooling' : (mode === 'HEAT' ? ' · heat on' : ' · HVAC off');
+                      const detail = 'DP out ' + Math.round(o_dp) + '° vs in ' + Math.round(i_dp) + '° · ' + (o_t - i_t >= 0 ? '+' : '') + (o_t - i_t).toFixed(1) + '°F' + hvacSuffix;
+                      return '<span style="color:' + color + '">' + text + '</span><br><span style="font-size:11px;font-style:normal;color:#555">' + detail + '</span>';
                     ]]]
 
           # ============ 5-DAY FORECAST ============

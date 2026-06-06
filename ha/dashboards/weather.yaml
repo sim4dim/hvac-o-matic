@@ -197,6 +197,7 @@ views:
                   {% set i_t  = states('sensor.ecowitt_indoor_temperature') | float(0) %}
                   {% set o_dp = states('sensor.weewx_dewpoint_3') | float(0) %}
                   {% set i_rh = states('sensor.ecowitt_indoor_humidity') | float(50) %}
+                  {% set o_rh = states('sensor.weewx_outdoor_humidity') | float(0) %}
                   {# Indoor dewpoint via simple Magnus-formula approximation in °F.
                      Convert to °C, compute Td_C, convert back. #}
                   {% set i_tc = (i_t - 32) * 5 / 9 %}
@@ -205,12 +206,20 @@ views:
                   {% set alpha = (a * i_tc) / (b + i_tc) + (i_rh / 100) | log %}
                   {% set i_dp_c = (b * alpha) / (a - alpha) %}
                   {% set i_dp = i_dp_c * 9 / 5 + 32 %}
-                  {% set o_rh = states('sensor.weewx_outdoor_humidity') | float(0) %}
                   {% set dp_diff = o_dp - i_dp %}
-                  {% if dp_diff < -3 and o_t < i_t and o_rh < 75 %}Open the windows
-                  {%- elif dp_diff > 2 or o_rh > 80 %}Keep windows closed
-                  {%- elif o_t < i_t %}Cool but humid — judgment call
-                  {%- else %}No comfort gain{% endif %}
+                  {% set favorable = dp_diff < -3 and o_t < i_t and o_rh < 75 %}
+                  {% set humid_closed = dp_diff > 2 or o_rh > 80 %}
+                  {% set mode = states('input_select.hvac_mode') %}
+                  {% if mode == 'COOL' %}
+                    {% if favorable %}Open windows — let the AC rest
+                    {%- else %}Keep closed — AC running{% endif %}
+                  {%- elif mode == 'HEAT' %}Keep closed — heat running
+                  {%- else %}
+                    {% if favorable %}Open the windows
+                    {%- elif humid_closed %}Keep windows closed
+                    {%- elif o_t < i_t %}Cool but humid — judgment call
+                    {%- else %}No comfort gain{% endif %}
+                  {%- endif %}
                 secondary: >-
                   {% set o_t  = states('sensor.weewx_outdoor_temperature') | float(0) %}
                   {% set i_t  = states('sensor.ecowitt_indoor_temperature') | float(0) %}
@@ -219,7 +228,9 @@ views:
                   {% set i_tc = (i_t - 32) * 5 / 9 %}
                   {% set alpha = (17.27 * i_tc) / (237.7 + i_tc) + (i_rh / 100) | log %}
                   {% set i_dp = ((237.7 * alpha) / (17.27 - alpha)) * 9 / 5 + 32 %}
-                  Dewpoint out {{ o_dp | round(0) }}° vs in {{ i_dp | round(0) }}° · {{ '%+0.1f' % (o_t - i_t) }}°F temp diff
+                  {% set mode = states('input_select.hvac_mode') %}
+                  {% set hvac_suffix = ' · AC cooling' if mode == 'COOL' else (' · heat on' if mode == 'HEAT' else ' · HVAC off') %}
+                  Dewpoint out {{ o_dp | round(0) }}° vs in {{ i_dp | round(0) }}° · {{ '%+0.1f' % (o_t - i_t) }}°F temp diff{{ hvac_suffix }}
                 icon: mdi:window-open-variant
                 icon_color: >-
                   {% set o_t  = states('sensor.weewx_outdoor_temperature') | float(0) %}
@@ -231,9 +242,17 @@ views:
                   {% set alpha = (17.27 * i_tc) / (237.7 + i_tc) + (i_rh / 100) | log %}
                   {% set i_dp = ((237.7 * alpha) / (17.27 - alpha)) * 9 / 5 + 32 %}
                   {% set dp_diff = o_dp - i_dp %}
-                  {% if dp_diff < -3 and o_t < i_t and o_rh < 75 %}green
-                  {%- elif dp_diff > 2 or o_rh > 80 %}red
-                  {%- else %}grey{% endif %}
+                  {% set favorable = dp_diff < -3 and o_t < i_t and o_rh < 75 %}
+                  {% set humid_closed = dp_diff > 2 or o_rh > 80 %}
+                  {% set mode = states('input_select.hvac_mode') %}
+                  {% if mode == 'COOL' %}
+                    {% if favorable %}green{%- else %}red{% endif %}
+                  {%- elif mode == 'HEAT' %}red
+                  {%- else %}
+                    {% if favorable %}green
+                    {%- elif humid_closed %}red
+                    {%- else %}grey{% endif %}
+                  {%- endif %}
 
           # ============================================================
           # ROW 3: FORECAST  (full width)
