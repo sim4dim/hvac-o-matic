@@ -1,0 +1,26 @@
+# Weekly/monthly accumulated rain. Source: AcuRite monotonic hardware counter (rain_total).
+# utility_meter accumulates from creation; calibrated to WeeWX DB totals at deploy (see notes).
+mqtt:
+  sensor:
+    - name: "WeeWX Rain Total"
+      unique_id: weewx_rain_total
+      state_topic: "weather/loop"
+      value_template: "{{ value_json.rain_total | float | round(4) }}"
+      unit_of_measurement: "in"
+      device_class: precipitation
+      state_class: total_increasing
+      availability:
+        - topic: "weather/loop"
+          value_template: "{{ 'online' if value_json.rain_total is defined else 'offline' }}"
+
+utility_meter:
+  rain_this_week:
+    name: "Rain This Week"
+    unique_id: rain_this_week
+    source: sensor.weewx_rain_total
+    cycle: weekly
+  rain_this_month:
+    name: "Rain This Month"
+    unique_id: rain_this_month
+    source: sensor.weewx_rain_total
+    cycle: monthly

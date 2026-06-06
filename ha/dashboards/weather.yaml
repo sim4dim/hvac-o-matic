@@ -166,7 +166,9 @@ views:
                 primary: "{{ states('sensor.weewx_rain_today') }} in today"
                 secondary: >-
                   {% set r = states('sensor.weewx_rain_rate_2') | float(0) %}
-                  {% if r == 0 %}No rain falling{% elif r < 0.1 %}Light · {{ r }} in/h{% elif r < 0.3 %}Moderate · {{ r }} in/h{% else %}Heavy · {{ r }} in/h{% endif %}
+                  {% set w = states('sensor.rain_this_week') | float(0) %}
+                  {% set m = states('sensor.rain_this_month') | float(0) %}
+                  {% if r == 0 %}No rain · {{ '%.2f'|format(w) }} in wk · {{ '%.2f'|format(m) }} in mo{% elif r < 0.1 %}Light · {{ r }} in/h · {{ '%.2f'|format(w) }} wk · {{ '%.2f'|format(m) }} mo{% elif r < 0.3 %}Moderate · {{ r }} in/h · {{ '%.2f'|format(w) }} wk · {{ '%.2f'|format(m) }} mo{% else %}Heavy · {{ r }} in/h · {{ '%.2f'|format(w) }} wk · {{ '%.2f'|format(m) }} mo{% endif %}
                 icon: mdi:weather-rainy
                 icon_color: >-
                   {% set r = states('sensor.weewx_rain_rate_2') | float(0) %}
