@@ -527,32 +527,44 @@ views:
                   suggest: |
                     [[[
                       const o_t  = parseFloat(states['sensor.weewx_outdoor_temperature'].state) || 0;
-                      const i_t  = parseFloat(states['sensor.ecowitt_indoor_temperature'].state) || 70;
                       const o_dp = parseFloat(states['sensor.weewx_dewpoint_3'].state) || 0;
-                      const i_rh = parseFloat(states['sensor.ecowitt_indoor_humidity'].state) || 50;
                       const o_rh = parseFloat(states['sensor.weewx_outdoor_humidity'].state) || 0;
+                      // Pick hottest conditioned room; use its temp+RH for indoor dewpoint
+                      const roomDefs = [
+                        {n:'Ben',    t: parseFloat((states['sensor.gw1000_temp_ch7']||{}).state),   h: parseFloat((states['sensor.gw1000_humidity_ch7']||{}).state)},
+                        {n:'Gene',   t: parseFloat((states['sensor.gw1000_temp_ch6']||{}).state),   h: parseFloat((states['sensor.gw1000_humidity_ch6']||{}).state)},
+                        {n:'MBR',    t: parseFloat((states['sensor.gw1000_temp_ch4']||{}).state),   h: parseFloat((states['sensor.gw1000_humidity_ch4']||{}).state)},
+                        {n:'1st Fl', t: parseFloat((states['sensor.gw1000_indoor_temperature']||{}).state), h: parseFloat((states['sensor.gw1000_indoor_humidity']||{}).state)}
+                      ];
+                      const rooms = roomDefs.filter(r => !isNaN(r.t));
+                      const hottest = rooms.reduce((a, b) => (b.t > a.t ? b : a), rooms[0] || {n:'?', t:70, h:50});
+                      const i_t  = isNaN(hottest.t) ? 70 : hottest.t;
+                      const i_rh = isNaN(hottest.h) ? 50 : hottest.h;
                       const i_tc = (i_t - 32) * 5 / 9;
                       const a = 17.27, b = 237.7;
                       const alpha = (a * i_tc) / (b + i_tc) + Math.log(i_rh / 100);
                       const i_dp = (b * alpha) / (a - alpha) * 9 / 5 + 32;
                       const dp_diff = o_dp - i_dp;
                       const favorable = dp_diff < -3 && o_t < i_t && o_rh < 75;
-                      const humid_closed = dp_diff > 2 || o_rh > 80;
+                      const humid = dp_diff > 2 || o_rh > 80;
                       const mode = states['input_select.hvac_mode'] ? states['input_select.hvac_mode'].state : 'OFF';
                       let text, color;
-                      if (mode === 'COOL') {
-                        if (favorable) { text = 'Open the windows — let the AC rest'; color = 'green'; }
-                        else           { text = 'Keep closed — AC running';            color = 'red';   }
+                      if (favorable) {
+                        if (mode === 'COOL') { text = 'Open windows — skip the AC'; color = 'green'; }
+                        else                 { text = 'Open the windows';            color = 'green'; }
                       } else if (mode === 'HEAT') {
-                        text = 'Keep closed — heat running'; color = 'red';
+                        text = 'Keep closed — heating'; color = 'red';
+                      } else if (humid) {
+                        if (mode === 'COOL') { text = 'Run the AC — too humid out'; color = 'red'; }
+                        else                 { text = 'Keep windows closed';         color = 'red'; }
+                      } else if (o_t >= i_t) {
+                        if (mode === 'COOL') { text = 'Run the AC — warmer out'; color = 'red';   }
+                        else                 { text = 'No comfort gain';          color = '#555'; }
                       } else {
-                        if (favorable)         { text = 'Open the windows';              color = 'green'; }
-                        else if (humid_closed) { text = 'Keep windows closed';           color = 'red';   }
-                        else if (o_t < i_t)   { text = 'Cool but humid — judgment call'; color = '#555'; }
-                        else                  { text = 'No comfort gain';                color = '#555'; }
+                        text = 'Cool but humid — judgment call'; color = '#555';
                       }
                       const hvacSuffix = mode === 'COOL' ? ' · AC cooling' : (mode === 'HEAT' ? ' · heat on' : ' · HVAC off');
-                      const detail = 'DP out ' + Math.round(o_dp) + '° vs in ' + Math.round(i_dp) + '° · ' + (o_t - i_t >= 0 ? '+' : '') + (o_t - i_t).toFixed(1) + '°F' + hvacSuffix;
+                      const detail = 'DP out ' + Math.round(o_dp) + '° vs hottest rm ' + hottest.n + ' ' + Math.round(i_dp) + '° · ' + (o_t - i_t >= 0 ? '+' : '') + (o_t - i_t).toFixed(1) + '°F' + hvacSuffix;
                       return '<span style="color:' + color + '">' + text + '</span><br><span style="font-size:11px;font-style:normal;color:#555">' + detail + '</span>';
                     ]]]
 
