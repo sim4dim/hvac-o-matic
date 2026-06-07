@@ -188,7 +188,15 @@ views:
                   {% set i_tc = (i_t - 32) * 5 / 9 %}
                   {% set alpha = (17.27 * i_tc) / (237.7 + i_tc) + (i_rh / 100) | log %}
                   {% set i_dp = ((237.7 * alpha) / (17.27 - alpha)) * 9 / 5 + 32 %}
-                  Indoor dewpoint {{ i_dp | round(0) }}°F
+                  {% set rooms = [
+                    {'n':'Ben',    't': states('sensor.gw1000_temp_ch7')|float(none)},
+                    {'n':'Gene',   't': states('sensor.gw1000_temp_ch6')|float(none)},
+                    {'n':'MBR',    't': states('sensor.gw1000_temp_ch4')|float(none)},
+                    {'n':'1st Fl', 't': states('sensor.gw1000_indoor_temperature')|float(none)}
+                  ] | selectattr('t','!=',none) | list %}
+                  {% set hot = rooms | sort(attribute='t') | last %}
+                  {% set cold = rooms | sort(attribute='t') | first %}
+                  Dewpoint {{ i_dp|round(0) }}° · ↑ {{ hot.n }} {{ hot.t|round(0) }}° · ↓ {{ cold.n }} {{ cold.t|round(0) }}°
                 icon: mdi:home
                 icon_color: amber
               - type: custom:mushroom-template-card
