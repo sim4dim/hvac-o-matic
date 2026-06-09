@@ -529,19 +529,23 @@ views:
                       const o_t  = parseFloat(states['sensor.weewx_outdoor_temperature'].state) || 0;
                       const o_dp = parseFloat(states['sensor.weewx_dewpoint_3'].state) || 0;
                       const o_rh = parseFloat(states['sensor.weewx_outdoor_humidity'].state) || 0;
-                      // Pick hottest conditioned room; use its temp+RH for indoor dewpoint + setpoint
+                      // Pick hottest conditioned room; use its temp+RH for indoor dewpoint
                       const roomDefs = [
-                        {n:'Ben',    t: parseFloat((states['sensor.gw1000_temp_ch7']||{}).state),            h: parseFloat((states['sensor.gw1000_humidity_ch7']||{}).state),            sp: parseFloat(((states['climate.ben_s_room']||{}).attributes||{}).temperature)},
-                        {n:'Gene',   t: parseFloat((states['sensor.gw1000_temp_ch6']||{}).state),            h: parseFloat((states['sensor.gw1000_humidity_ch6']||{}).state),            sp: parseFloat(((states['climate.gene_s_room']||{}).attributes||{}).temperature)},
-                        {n:'MBR',    t: parseFloat((states['sensor.gw1000_temp_ch4']||{}).state),            h: parseFloat((states['sensor.gw1000_humidity_ch4']||{}).state),            sp: parseFloat(((states['climate.master_bedroom']||{}).attributes||{}).temperature)},
-                        {n:'1st Fl', t: parseFloat((states['sensor.gw1000_indoor_temperature']||{}).state),  h: parseFloat((states['sensor.gw1000_indoor_humidity']||{}).state),         sp: parseFloat(((states['climate.first_floor']||{}).attributes||{}).temperature)}
+                        {n:'Ben',    t: parseFloat((states['sensor.gw1000_temp_ch7']||{}).state),            h: parseFloat((states['sensor.gw1000_humidity_ch7']||{}).state)},
+                        {n:'Gene',   t: parseFloat((states['sensor.gw1000_temp_ch6']||{}).state),            h: parseFloat((states['sensor.gw1000_humidity_ch6']||{}).state)},
+                        {n:'MBR',    t: parseFloat((states['sensor.gw1000_temp_ch4']||{}).state),            h: parseFloat((states['sensor.gw1000_humidity_ch4']||{}).state)},
+                        {n:'1st Fl', t: parseFloat((states['sensor.gw1000_indoor_temperature']||{}).state),  h: parseFloat((states['sensor.gw1000_indoor_humidity']||{}).state)}
                       ];
                       const rooms = roomDefs.filter(r => !isNaN(r.t));
-                      const hottest = rooms.reduce((a, b) => (b.t > a.t ? b : a), rooms[0] || {n:'?', t:70, h:50, sp:NaN});
+                      const hottest = rooms.reduce((a, b) => (b.t > a.t ? b : a), rooms[0] || {n:'?', t:70, h:50});
                       const i_t  = isNaN(hottest.t) ? 70 : hottest.t;
                       const i_rh = isNaN(hottest.h) ? 50 : hottest.h;
-                      const sp   = isNaN(hottest.sp) ? null : hottest.sp;
-                      const cooling_demand = (sp === null) || (i_t >= sp);
+                      // Gate on the REAL keenect HVAC state, not per-room setpoints
+                      const ks    = (states['sensor.keenect_status'] || {}).state || '';
+                      const ks_on = ((states['sensor.keenect_status'] || {}).attributes || {}).hvac_on;
+                      const mode  = (states['input_select.hvac_mode'] || {}).state || 'OFF';
+                      const cooling_running = (ks === 'COOLING') || (ks_on === true && mode === 'COOL');
+                      const heating_running = (ks === 'HEATING') || (ks_on === true && mode === 'HEAT');
                       const i_tc = (i_t - 32) * 5 / 9;
                       const a = 17.27, b = 237.7;
                       const alpha = (a * i_tc) / (b + i_tc) + Math.log(i_rh / 100);
@@ -549,10 +553,9 @@ views:
                       const dp_diff = o_dp - i_dp;
                       const favorable = dp_diff < -3 && o_t < i_t && o_rh < 75;
                       const humid = dp_diff > 2 || o_rh > 80;
-                      const mode = states['input_select.hvac_mode'] ? states['input_select.hvac_mode'].state : 'OFF';
                       let text, color;
                       if (mode === 'COOL') {
-                        if (cooling_demand) {
+                        if (cooling_running) {
                           if (favorable)        { text = 'Open windows — skip the AC'; color = 'green'; }
                           else if (humid)       { text = 'Run the AC — too humid out'; color = 'red'; }
                           else if (o_t >= i_t)  { text = 'Run the AC — warmer out';   color = 'red'; }
@@ -570,9 +573,8 @@ views:
                         else if (o_t < i_t)     { text = 'Cool but humid — judgment call'; color = '#555'; }
                         else                    { text = 'No comfort gain';               color = '#555'; }
                       }
-                      const spStr = sp !== null ? Math.round(sp) + '°' : '?°';
-                      const demandLabel = (mode === 'COOL' && cooling_demand) ? 'AC cooling' : (mode === 'COOL' ? 'AC idle' : (mode === 'HEAT' ? 'heat on' : 'HVAC off'));
-                      const detail = 'Hottest ' + hottest.n + ' ' + Math.round(i_t) + '° (set ' + spStr + ') · DP ' + Math.round(o_dp) + '/' + Math.round(i_dp) + '° · ' + demandLabel;
+                      const hvacLabel = cooling_running ? 'AC cooling' : (mode === 'COOL' ? 'AC idle' : (heating_running ? 'heat on' : 'HVAC off'));
+                      const detail = 'Hottest ' + hottest.n + ' ' + Math.round(i_t) + '° · DP ' + Math.round(o_dp) + '/' + Math.round(i_dp) + '° · ' + hvacLabel;
                       return '<span style="color:' + color + '">' + text + '</span><br><span style="font-size:11px;font-style:normal;color:#555">' + detail + '</span>';
                     ]]]
 

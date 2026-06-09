@@ -206,16 +206,20 @@ views:
                   {% set o_rh = states('sensor.weewx_outdoor_humidity') | float(0) %}
                   {# Pick the hottest conditioned room; use its temp+RH for indoor dewpoint #}
                   {% set rooms = [
-                    {'n':'Ben',    't': states('sensor.gw1000_temp_ch7')|float(-99),          'h': states('sensor.gw1000_humidity_ch7')|float(50),   'sp': state_attr('climate.ben_s_room','temperature')},
-                    {'n':'Gene',   't': states('sensor.gw1000_temp_ch6')|float(-99),          'h': states('sensor.gw1000_humidity_ch6')|float(50),   'sp': state_attr('climate.gene_s_room','temperature')},
-                    {'n':'MBR',    't': states('sensor.gw1000_temp_ch4')|float(-99),          'h': states('sensor.gw1000_humidity_ch4')|float(50),   'sp': state_attr('climate.master_bedroom','temperature')},
-                    {'n':'1st Fl', 't': states('sensor.gw1000_indoor_temperature')|float(-99),'h': states('sensor.gw1000_indoor_humidity')|float(50),'sp': state_attr('climate.first_floor','temperature')}
+                    {'n':'Ben',    't': states('sensor.gw1000_temp_ch7')|float(-99),          'h': states('sensor.gw1000_humidity_ch7')|float(50)},
+                    {'n':'Gene',   't': states('sensor.gw1000_temp_ch6')|float(-99),          'h': states('sensor.gw1000_humidity_ch6')|float(50)},
+                    {'n':'MBR',    't': states('sensor.gw1000_temp_ch4')|float(-99),          'h': states('sensor.gw1000_humidity_ch4')|float(50)},
+                    {'n':'1st Fl', 't': states('sensor.gw1000_indoor_temperature')|float(-99),'h': states('sensor.gw1000_indoor_humidity')|float(50)}
                   ] %}
                   {% set hottest = rooms | sort(attribute='t') | last %}
                   {% set i_t  = hottest.t %}
                   {% set i_rh = hottest.h %}
-                  {% set sp   = hottest.sp | float(none) %}
-                  {% set cooling_demand = (sp is none) or (i_t >= sp) %}
+                  {# Gate on the REAL keenect HVAC state, not per-room setpoints #}
+                  {% set ks    = states('sensor.keenect_status') %}
+                  {% set ks_on = state_attr('sensor.keenect_status','hvac_on') %}
+                  {% set mode  = states('input_select.hvac_mode') %}
+                  {% set cooling_running = (ks == 'COOLING') or (ks_on == true and mode == 'COOL') %}
+                  {% set heating_running = (ks == 'HEATING') or (ks_on == true and mode == 'HEAT') %}
                   {# Indoor dewpoint via Magnus-formula approximation in °F #}
                   {% set i_tc = (i_t - 32) * 5 / 9 %}
                   {% set a = 17.27 %}
@@ -225,9 +229,8 @@ views:
                   {% set dp_diff = o_dp - i_dp %}
                   {% set favorable = dp_diff < -3 and o_t < i_t and o_rh < 75 %}
                   {% set humid = dp_diff > 2 or o_rh > 80 %}
-                  {% set mode = states('input_select.hvac_mode') %}
                   {% if mode == 'COOL' %}
-                    {% if cooling_demand %}
+                    {% if cooling_running %}
                       {% if favorable %}Open windows — skip the AC
                       {%- elif humid %}Run the AC — too humid out
                       {%- elif o_t >= i_t %}Run the AC — warmer out
@@ -251,48 +254,54 @@ views:
                   {% set o_t  = states('sensor.weewx_outdoor_temperature') | float(0) %}
                   {% set o_dp = states('sensor.weewx_dewpoint_3') | float(0) %}
                   {% set rooms = [
-                    {'n':'Ben',    't': states('sensor.gw1000_temp_ch7')|float(-99),          'h': states('sensor.gw1000_humidity_ch7')|float(50),   'sp': state_attr('climate.ben_s_room','temperature')},
-                    {'n':'Gene',   't': states('sensor.gw1000_temp_ch6')|float(-99),          'h': states('sensor.gw1000_humidity_ch6')|float(50),   'sp': state_attr('climate.gene_s_room','temperature')},
-                    {'n':'MBR',    't': states('sensor.gw1000_temp_ch4')|float(-99),          'h': states('sensor.gw1000_humidity_ch4')|float(50),   'sp': state_attr('climate.master_bedroom','temperature')},
-                    {'n':'1st Fl', 't': states('sensor.gw1000_indoor_temperature')|float(-99),'h': states('sensor.gw1000_indoor_humidity')|float(50),'sp': state_attr('climate.first_floor','temperature')}
+                    {'n':'Ben',    't': states('sensor.gw1000_temp_ch7')|float(-99),          'h': states('sensor.gw1000_humidity_ch7')|float(50)},
+                    {'n':'Gene',   't': states('sensor.gw1000_temp_ch6')|float(-99),          'h': states('sensor.gw1000_humidity_ch6')|float(50)},
+                    {'n':'MBR',    't': states('sensor.gw1000_temp_ch4')|float(-99),          'h': states('sensor.gw1000_humidity_ch4')|float(50)},
+                    {'n':'1st Fl', 't': states('sensor.gw1000_indoor_temperature')|float(-99),'h': states('sensor.gw1000_indoor_humidity')|float(50)}
                   ] %}
                   {% set hottest = rooms | sort(attribute='t') | last %}
                   {% set i_t  = hottest.t %}
                   {% set i_rh = hottest.h %}
-                  {% set sp   = hottest.sp | float(none) %}
-                  {% set cooling_demand = (sp is none) or (i_t >= sp) %}
+                  {% set ks    = states('sensor.keenect_status') %}
+                  {% set ks_on = state_attr('sensor.keenect_status','hvac_on') %}
+                  {% set mode  = states('input_select.hvac_mode') %}
+                  {% set cooling_running = (ks == 'COOLING') or (ks_on == true and mode == 'COOL') %}
+                  {% set heating_running = (ks == 'HEATING') or (ks_on == true and mode == 'HEAT') %}
                   {% set i_tc = (i_t - 32) * 5 / 9 %}
                   {% set alpha = (17.27 * i_tc) / (237.7 + i_tc) + (i_rh / 100) | log %}
                   {% set i_dp = ((237.7 * alpha) / (17.27 - alpha)) * 9 / 5 + 32 %}
-                  {% set mode = states('input_select.hvac_mode') %}
-                  {% set demand_label = 'AC cooling' if (mode == 'COOL' and cooling_demand) else ('AC idle' if mode == 'COOL' else ('heat on' if mode == 'HEAT' else 'HVAC off')) %}
-                  {% set sp_str = sp | round(0) | string if sp is not none else '?' %}
-                  Hottest {{ hottest.n }} {{ i_t | round(0) }}° (set {{ sp_str }}°) · DP {{ o_dp | round(0) }}/{{ i_dp | round(0) }}° · {{ demand_label }}
+                  {% if cooling_running %}{% set hvac_label = 'AC cooling' %}
+                  {%- elif mode == 'COOL' %}{% set hvac_label = 'AC idle' %}
+                  {%- elif heating_running %}{% set hvac_label = 'heat on' %}
+                  {%- else %}{% set hvac_label = 'HVAC off' %}
+                  {%- endif %}
+                  Hottest {{ hottest.n }} {{ i_t | round(0) }}° · DP {{ o_dp | round(0) }}/{{ i_dp | round(0) }}° · {{ hvac_label }}
                 icon: mdi:window-open-variant
                 icon_color: >-
                   {% set o_t  = states('sensor.weewx_outdoor_temperature') | float(0) %}
                   {% set o_dp = states('sensor.weewx_dewpoint_3') | float(0) %}
                   {% set o_rh = states('sensor.weewx_outdoor_humidity') | float(0) %}
                   {% set rooms = [
-                    {'n':'Ben',    't': states('sensor.gw1000_temp_ch7')|float(-99),          'h': states('sensor.gw1000_humidity_ch7')|float(50),   'sp': state_attr('climate.ben_s_room','temperature')},
-                    {'n':'Gene',   't': states('sensor.gw1000_temp_ch6')|float(-99),          'h': states('sensor.gw1000_humidity_ch6')|float(50),   'sp': state_attr('climate.gene_s_room','temperature')},
-                    {'n':'MBR',    't': states('sensor.gw1000_temp_ch4')|float(-99),          'h': states('sensor.gw1000_humidity_ch4')|float(50),   'sp': state_attr('climate.master_bedroom','temperature')},
-                    {'n':'1st Fl', 't': states('sensor.gw1000_indoor_temperature')|float(-99),'h': states('sensor.gw1000_indoor_humidity')|float(50),'sp': state_attr('climate.first_floor','temperature')}
+                    {'n':'Ben',    't': states('sensor.gw1000_temp_ch7')|float(-99),          'h': states('sensor.gw1000_humidity_ch7')|float(50)},
+                    {'n':'Gene',   't': states('sensor.gw1000_temp_ch6')|float(-99),          'h': states('sensor.gw1000_humidity_ch6')|float(50)},
+                    {'n':'MBR',    't': states('sensor.gw1000_temp_ch4')|float(-99),          'h': states('sensor.gw1000_humidity_ch4')|float(50)},
+                    {'n':'1st Fl', 't': states('sensor.gw1000_indoor_temperature')|float(-99),'h': states('sensor.gw1000_indoor_humidity')|float(50)}
                   ] %}
                   {% set hottest = rooms | sort(attribute='t') | last %}
                   {% set i_t  = hottest.t %}
                   {% set i_rh = hottest.h %}
-                  {% set sp   = hottest.sp | float(none) %}
-                  {% set cooling_demand = (sp is none) or (i_t >= sp) %}
+                  {% set ks    = states('sensor.keenect_status') %}
+                  {% set ks_on = state_attr('sensor.keenect_status','hvac_on') %}
+                  {% set mode  = states('input_select.hvac_mode') %}
+                  {% set cooling_running = (ks == 'COOLING') or (ks_on == true and mode == 'COOL') %}
                   {% set i_tc = (i_t - 32) * 5 / 9 %}
                   {% set alpha = (17.27 * i_tc) / (237.7 + i_tc) + (i_rh / 100) | log %}
                   {% set i_dp = ((237.7 * alpha) / (17.27 - alpha)) * 9 / 5 + 32 %}
                   {% set dp_diff = o_dp - i_dp %}
                   {% set favorable = dp_diff < -3 and o_t < i_t and o_rh < 75 %}
                   {% set humid = dp_diff > 2 or o_rh > 80 %}
-                  {% set mode = states('input_select.hvac_mode') %}
                   {% if mode == 'COOL' %}
-                    {% if cooling_demand %}
+                    {% if cooling_running %}
                       {% if favorable %}green
                       {%- elif humid %}red
                       {%- elif o_t >= i_t %}red
