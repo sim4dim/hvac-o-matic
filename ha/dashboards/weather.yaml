@@ -461,3 +461,92 @@ views:
                 stroke_width: 2
                 curve: smooth
                 color: '#9467bd'
+
+          # ============================================================
+          # IRRIGATION ADVISOR
+          # ET soil-water-balance model + heat-stress counter.
+          # Advice-only (no sprinkler control).
+          # ============================================================
+          - type: custom:stack-in-card
+            cards:
+              # --- Section header ---
+              - type: markdown
+                content: "## 🌱 Irrigation Advisor"
+                style: "ha-card { box-shadow: none; padding: 8px 16px 0; }"
+
+              # --- Lawn advice chip row ---
+              - type: custom:mushroom-template-card
+                primary: >-
+                  {{ states('sensor.irrigation_lawn_advice') }}
+                secondary: >-
+                  Deficit {{ states('sensor.irrigation_lawn_deficit') | round(2) }}" · ET today {{ states('sensor.irrigation_et0_today') | round(3) }}" · 7-day rain {{ states('sensor.rain_this_week') | round(2) }}" · Next 48h {{ states('sensor.irrigation_forecast_rain_48h') | round(2) }}"
+                icon: >-
+                  {% set adv = states('sensor.irrigation_lawn_advice') %}
+                  {% if 'Water lawn' in adv %}mdi:sprinkler
+                  {% elif 'Skip' in adv %}mdi:weather-rainy
+                  {% else %}mdi:grass{% endif %}
+                icon_color: >-
+                  {% set adv = states('sensor.irrigation_lawn_advice') %}
+                  {% if 'Water lawn' in adv %}
+                    {% set d = states('sensor.irrigation_lawn_deficit') | float(0) %}
+                    {{ 'red' if d > 0.6 else 'amber' }}
+                  {% elif 'Skip' in adv %}blue
+                  {% else %}green{% endif %}
+                tap_action:
+                  action: more-info
+                  entity: sensor.irrigation_lawn_advice
+
+              # --- Lawn run-time line ---
+              - type: custom:mushroom-template-card
+                primary: >-
+                  Run time: {{ states('sensor.irrigation_lawn_runtime') }}
+                secondary: >-
+                  Sprinkler rate {{ states('input_number.irrigation_sprinkler_rate') }} in/h · Trigger ≥ 0.375", target 1.0"
+                icon: mdi:timer-outline
+                icon_color: grey
+
+              # --- Planter advice chip ---
+              - type: custom:mushroom-template-card
+                primary: >-
+                  {{ states('sensor.irrigation_planter_advice') }}
+                secondary: >-
+                  {% set hd = state_attr('sensor.irrigation_planter_advice', 'heat_days') %}
+                  Heat stress days (rolling): {{ states('sensor.irrigation_planter_advice') }}
+                  {%- set pl = state_attr('sensor.irrigation_planter_advice', 'last_watered') %}
+                  {%- if pl %} · Last watered {{ pl }}{% endif %}
+                icon: mdi:flower
+                icon_color: >-
+                  {% set adv = states('sensor.irrigation_planter_advice') %}
+                  {% if 'now' in adv %}red
+                  {% elif 'Check' in adv %}amber
+                  {% else %}green{% endif %}
+                tap_action:
+                  action: more-info
+                  entity: sensor.irrigation_planter_advice
+
+              # --- Watered buttons (row) ---
+              - type: horizontal-stack
+                cards:
+                  - type: custom:mushroom-template-card
+                    primary: Watered lawn today
+                    icon: mdi:grass
+                    icon_color: blue
+                    tap_action:
+                      action: toggle
+                      entity: input_boolean.irrigation_lawn_watered
+                  - type: custom:mushroom-template-card
+                    primary: Watered planters today
+                    icon: mdi:flower
+                    icon_color: teal
+                    tap_action:
+                      action: toggle
+                      entity: input_boolean.irrigation_planters_watered
+
+              # --- Settings (fold) ---
+              - type: custom:fold-entity-row
+                head:
+                  type: section
+                  label: Irrigation Settings
+                entities:
+                  - entity: input_number.irrigation_sprinkler_rate
+                    name: Sprinkler Rate (in/h)
