@@ -152,6 +152,39 @@ mqtt:
         - topic: "weather/loop"
           value_template: "{{ 'online' if value_json.dayRain_in is defined else 'offline' }}"
 
+    - name: "WeeWX Heat Index"
+      unique_id: weewx_heat_index
+      state_topic: "weather/loop"
+      value_template: "{{ value_json.heatindex_F | float | round(1) }}"
+      unit_of_measurement: "°F"
+      device_class: temperature
+      state_class: measurement
+      availability:
+        - topic: "weather/loop"
+          value_template: "{{ 'online' if value_json.heatindex_F is defined else 'offline' }}"
+
+    - name: "WeeWX Wind Chill"
+      unique_id: weewx_wind_chill
+      state_topic: "weather/loop"
+      value_template: "{{ value_json.windchill_F | float | round(1) }}"
+      unit_of_measurement: "°F"
+      device_class: temperature
+      state_class: measurement
+      availability:
+        - topic: "weather/loop"
+          value_template: "{{ 'online' if value_json.windchill_F is defined else 'offline' }}"
+
+    - name: "WeeWX Apparent Temperature"
+      unique_id: weewx_apparent_temperature
+      state_topic: "weather/loop"
+      value_template: "{{ value_json.appTemp_F | float | round(1) }}"
+      unit_of_measurement: "°F"
+      device_class: temperature
+      state_class: measurement
+      availability:
+        - topic: "weather/loop"
+          value_template: "{{ 'online' if value_json.appTemp_F is defined else 'offline' }}"
+
 # Barometer 3-hour trend: derived from canonical MQTT barometer via statistics sensor.
 # entity_id will be sensor.weewx_barometer_trend_3h once the REST duplicate is removed.
 sensor:

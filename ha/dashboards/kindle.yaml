@@ -119,19 +119,26 @@ views:
                   const t = parseFloat(states['sensor.weewx_outdoor_temperature'].state);
                   const rh = parseFloat(states['sensor.weewx_outdoor_humidity'].state);
                   const w = parseFloat(states['sensor.weewx_wind_speed_2'].state);
-                  // Try met.no's apparent_temperature first (best value when available)
-                  const at = states['weather.forecast_home'] && states['weather.forecast_home'].attributes
+                  // Primary: local WeeWX apparent temperature (heat index in heat, wind chill in cold)
+                  const localAt = states['sensor.weewx_apparent_temperature']
+                    ? parseFloat(states['sensor.weewx_apparent_temperature'].state) : NaN;
+                  // Fallback 1: met.no apparent_temperature attribute
+                  const metnoAt = states['weather.forecast_home'] && states['weather.forecast_home'].attributes
                     ? states['weather.forecast_home'].attributes.apparent_temperature : null;
                   let fl;
-                  if (at !== null && at !== undefined && !isNaN(at)) {
-                    fl = at;
+                  if (!isNaN(localAt) && states['sensor.weewx_apparent_temperature'].state !== 'unavailable'
+                      && states['sensor.weewx_apparent_temperature'].state !== 'unknown') {
+                    fl = localAt;
+                  } else if (metnoAt !== null && metnoAt !== undefined && !isNaN(metnoAt)) {
+                    // Fallback 2: met.no apparent temperature
+                    fl = metnoAt;
                   } else if (t >= 80 && !isNaN(rh)) {
-                    // NWS heat index (Steadman) — valid for T >= 80°F, any RH
+                    // Fallback 3: NWS heat index (Steadman) — valid for T >= 80°F, any RH
                     fl = -42.379 + 2.04901523*t + 10.14333127*rh
                        - 0.22475541*t*rh - 6.83783e-3*t*t - 5.481717e-2*rh*rh
                        + 1.22874e-3*t*t*rh + 8.5282e-4*t*rh*rh - 1.99e-6*t*t*rh*rh;
                   } else if (t <= 50 && !isNaN(w) && w >= 3) {
-                    // NWS wind chill — valid for T <= 50°F and wind >= 3 mph
+                    // Fallback 4: NWS wind chill — valid for T <= 50°F and wind >= 3 mph
                     const vp = Math.pow(w, 0.16);
                     fl = 35.74 + 0.6215*t - 35.75*vp + 0.4275*t*vp;
                   } else {
