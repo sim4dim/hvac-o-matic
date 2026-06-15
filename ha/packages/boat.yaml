@@ -1,99 +1,170 @@
-# Boat MQTT sensors — topic: marine/dashboard/complete
-# Payload field paths verified against live feed 2026-06-14.
-# All existing boat_* entities in configuration.yaml used wrong field paths
-# (e.g. wind.apparent.speed_knots vs actual wind.apparent.speed_kn,
-# ble_sensors['MAC'].temperature_celsius vs actual ble.fridge.temperature_c).
-# This package owns the corrected sensors; the old entries in configuration.yaml
-# should be removed once these are confirmed working.
+# Boat MQTT sensors — individual topics (bare scalars, no JSON)
+# Topic prefix: marine/dashboard/
+# Rebuilt 2026-06-14 from live topic observation + boatnet/docs/mqtt-entries.md
 #
-# Unit choices (US user):
-#   Wind speed  : mph (converted from kn: kn * 1.15078)
-#   Temperature : °F  (converted from °C: c * 9/5 + 32)
-#   Wind angle  : degrees (payload already in degrees)
+# NOTE: Live topic names differ slightly from the schema doc (e.g. the doc says
+# ble/fridge/temperature_c but the broker publishes ble/fridge/temperature).
+# All state_topics here are confirmed against live mosquitto_sub output.
+#
+# Skipped per instructions:
+#   marine/dashboard/complete        (JSON blob — superseded)
+#   environment/water_temp           (phantom -1.7 C, no real sensor)
+#   environment/air_temp             (null, no sensor)
+#   environment/pressure             (null, no sensor)
+#   *_ms / voltage variants          (duplicate units — kn/°C/% preferred)
+#
+# Not available as individual topics (only in JSON blob):
+#   navigation/lat, navigation/lon, navigation/gps_fix, system/mqtt_connected
+#   These are skipped per "SKIP complete" constraint.
+#
+# Unit choices (US boater mix):
+#   Temperature : °C raw → °F  (value_template: c*9/5+32)
+#   Wind speed  : kn native   (no conversion; live speed topic value is knots)
+#   Depth       : m raw → ft  (value_template: m*3.28084)
+#   All others  : native
 
 mqtt:
   sensor:
-    # --- Wind (apparent) ---
-    - name: "Boat Wind Apparent Speed"
-      unique_id: "boat_wind_apparent_speed"
-      state_topic: "marine/dashboard/complete"
-      unit_of_measurement: "mph"
-      device_class: wind_speed
-      value_template: >-
-        {% set kn = value_json.wind.apparent.speed_kn | float(0) %}
-        {{ (kn * 1.15078) | round(1) }}
-      availability_topic: "marine/dashboard/complete"
-      availability_template: "{{ 'online' if value_json is defined else 'offline' }}"
 
-    - name: "Boat Wind Apparent Angle"
-      unique_id: "boat_wind_apparent_angle"
-      state_topic: "marine/dashboard/complete"
-      unit_of_measurement: "°"
-      value_template: "{{ value_json.wind.apparent.angle | float(0) | round(1) }}"
-      availability_topic: "marine/dashboard/complete"
-      availability_template: "{{ 'online' if value_json is defined else 'offline' }}"
+    # ---- BLE: Fridge ----
 
-    # --- Wind (true) ---
-    - name: "Boat Wind True Speed"
-      unique_id: "boat_wind_true_speed"
-      state_topic: "marine/dashboard/complete"
-      unit_of_measurement: "mph"
-      device_class: wind_speed
-      value_template: >-
-        {% set kn = value_json.wind.true.speed_kn | float(0) %}
-        {{ (kn * 1.15078) | round(1) }}
-      availability_topic: "marine/dashboard/complete"
-      availability_template: "{{ 'online' if value_json is defined else 'offline' }}"
-
-    - name: "Boat Wind True Angle"
-      unique_id: "boat_wind_true_angle"
-      state_topic: "marine/dashboard/complete"
-      unit_of_measurement: "°"
-      value_template: "{{ value_json.wind.true.angle | float(0) | round(1) }}"
-      availability_topic: "marine/dashboard/complete"
-      availability_template: "{{ 'online' if value_json is defined else 'offline' }}"
-
-    # --- Temperature: cabin/outside sensor (BLE "outside" tag on the boat) ---
-    # Note: environment.air_temp_c is null in live payload; ble.outside is an
-    # Inkbird BLE sensor placed outside the fridge (cabin ambient).
-    - name: "Boat Temperature"
-      unique_id: "boat_temperature"
-      state_topic: "marine/dashboard/complete"
-      unit_of_measurement: "°F"
-      device_class: temperature
-      value_template: >-
-        {% set c = value_json.ble.outside.temperature_c | float(none) %}
-        {% if c is not none %}{{ (c * 9/5 + 32) | round(1) }}{% else %}unavailable{% endif %}
-      availability_topic: "marine/dashboard/complete"
-      availability_template: "{{ 'online' if value_json is defined else 'offline' }}"
-
-    # --- Temperature: fridge ---
     - name: "Boat Fridge Temperature"
       unique_id: "boat_fridge_temperature"
-      state_topic: "marine/dashboard/complete"
-      unit_of_measurement: "°F"
+      state_topic: "marine/dashboard/ble/fridge/temperature"
       device_class: temperature
-      value_template: >-
-        {% set c = value_json.ble.fridge.temperature_c | float(none) %}
-        {% if c is not none %}{{ (c * 9/5 + 32) | round(1) }}{% else %}unavailable{% endif %}
-      availability_topic: "marine/dashboard/complete"
-      availability_template: "{{ 'online' if value_json is defined else 'offline' }}"
+      unit_of_measurement: "°F"
+      value_template: "{{ (value | float * 9 / 5 + 32) | round(1) }}"
 
-    # --- Humidity: fridge and outside BLE sensors ---
     - name: "Boat Fridge Humidity"
       unique_id: "boat_fridge_humidity"
-      state_topic: "marine/dashboard/complete"
-      unit_of_measurement: "%"
+      state_topic: "marine/dashboard/ble/fridge/humidity"
       device_class: humidity
-      value_template: "{{ value_json.ble.fridge.humidity_pct | float(0) | round(1) }}"
-      availability_topic: "marine/dashboard/complete"
-      availability_template: "{{ 'online' if value_json is defined else 'offline' }}"
+      unit_of_measurement: "%"
+
+    - name: "Boat Fridge Battery"
+      unique_id: "boat_fridge_battery"
+      state_topic: "marine/dashboard/ble/fridge/battery"
+      device_class: battery
+      unit_of_measurement: "%"
+
+    - name: "Boat Fridge RSSI"
+      unique_id: "boat_fridge_rssi"
+      state_topic: "marine/dashboard/ble/fridge/rssi"
+      device_class: signal_strength
+      unit_of_measurement: "dBm"
+
+    # ---- BLE: Outside (cabin ambient) ----
+
+    - name: "Boat Temperature"
+      unique_id: "boat_temperature"
+      state_topic: "marine/dashboard/ble/outside/temperature"
+      device_class: temperature
+      unit_of_measurement: "°F"
+      value_template: "{{ (value | float * 9 / 5 + 32) | round(1) }}"
 
     - name: "Boat Outside Humidity"
       unique_id: "boat_outside_humidity"
-      state_topic: "marine/dashboard/complete"
-      unit_of_measurement: "%"
+      state_topic: "marine/dashboard/ble/outside/humidity"
       device_class: humidity
-      value_template: "{{ value_json.ble.outside.humidity_pct | float(0) | round(1) }}"
-      availability_topic: "marine/dashboard/complete"
-      availability_template: "{{ 'online' if value_json is defined else 'offline' }}"
+      unit_of_measurement: "%"
+
+    - name: "Boat Outside Battery"
+      unique_id: "boat_outside_battery"
+      state_topic: "marine/dashboard/ble/outside/battery"
+      device_class: battery
+      unit_of_measurement: "%"
+
+    - name: "Boat Outside RSSI"
+      unique_id: "boat_outside_rssi"
+      state_topic: "marine/dashboard/ble/outside/rssi"
+      device_class: signal_strength
+      unit_of_measurement: "dBm"
+
+    # ---- Wind ----
+    # Live topic: wind/apparent/speed (value in knots, confirmed via JSON blob cross-check)
+
+    - name: "Boat Wind Apparent Speed"
+      unique_id: "boat_wind_apparent_speed"
+      state_topic: "marine/dashboard/wind/apparent/speed"
+      # device_class: wind_speed intentionally omitted — HA auto-converts kn→mph
+      # when device_class wind_speed is set + system is imperial. Omitting it
+      # bypasses conversion and delivers the raw kn value directly.
+      unit_of_measurement: "kn"
+
+    - name: "Boat Wind Apparent Angle"
+      unique_id: "boat_wind_apparent_angle"
+      state_topic: "marine/dashboard/wind/apparent/angle"
+      unit_of_measurement: "°"
+
+    - name: "Boat Wind True Speed"
+      unique_id: "boat_wind_true_speed"
+      state_topic: "marine/dashboard/wind/true/speed"
+      # device_class: wind_speed intentionally omitted — see above
+      unit_of_measurement: "kn"
+
+    - name: "Boat Wind True Angle"
+      unique_id: "boat_wind_true_angle"
+      state_topic: "marine/dashboard/wind/true/angle"
+      unit_of_measurement: "°"
+
+    # ---- Navigation ----
+    # Live topics: navigation/sog and navigation/stw (not sog_kn/stw_kn)
+    # Values confirmed in knots via JSON blob cross-check (sog_kn: 0.0 = sog: 0.0)
+
+    - name: "Boat SOG"
+      unique_id: "boat_sog"
+      state_topic: "marine/dashboard/navigation/sog"
+      device_class: speed
+      unit_of_measurement: "kn"
+
+    - name: "Boat STW"
+      unique_id: "boat_stw"
+      state_topic: "marine/dashboard/navigation/stw"
+      device_class: speed
+      unit_of_measurement: "kn"
+
+    - name: "Boat COG"
+      unique_id: "boat_cog"
+      state_topic: "marine/dashboard/navigation/cog"
+      unit_of_measurement: "°"
+
+    - name: "Boat Heading"
+      unique_id: "boat_heading"
+      state_topic: "marine/dashboard/navigation/heading"
+      unit_of_measurement: "°"
+
+    # ---- Environment ----
+    # Live topic: environment/depth (not depth_m); value confirmed in meters via JSON blob
+
+    - name: "Boat Depth"
+      unique_id: "boat_depth"
+      state_topic: "marine/dashboard/environment/depth"
+      device_class: distance
+      unit_of_measurement: "ft"
+      value_template: "{{ (value | float * 3.28084) | round(1) }}"
+
+    # ---- System ----
+
+    - name: "Boat Status"
+      unique_id: "boat_status"
+      state_topic: "marine/dashboard/system/status"
+
+    - name: "Boat Last Update"
+      unique_id: "boat_last_update"
+      state_topic: "marine/dashboard/system/timestamp"
+      device_class: timestamp
+
+  binary_sensor:
+
+    - name: "Boat YDWG Connected"
+      unique_id: "boat_ydwg_connected"
+      state_topic: "marine/dashboard/system/ydwg_connected"
+      device_class: connectivity
+      payload_on: "true"
+      payload_off: "false"
+
+    - name: "Boat Autopilot Active"
+      unique_id: "boat_autopilot_active"
+      state_topic: "marine/dashboard/autopilot/active"
+      payload_on: "true"
+      payload_off: "false"
