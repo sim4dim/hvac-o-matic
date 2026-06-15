@@ -1,0 +1,99 @@
+# Boat MQTT sensors — topic: marine/dashboard/complete
+# Payload field paths verified against live feed 2026-06-14.
+# All existing boat_* entities in configuration.yaml used wrong field paths
+# (e.g. wind.apparent.speed_knots vs actual wind.apparent.speed_kn,
+# ble_sensors['MAC'].temperature_celsius vs actual ble.fridge.temperature_c).
+# This package owns the corrected sensors; the old entries in configuration.yaml
+# should be removed once these are confirmed working.
+#
+# Unit choices (US user):
+#   Wind speed  : mph (converted from kn: kn * 1.15078)
+#   Temperature : °F  (converted from °C: c * 9/5 + 32)
+#   Wind angle  : degrees (payload already in degrees)
+
+mqtt:
+  sensor:
+    # --- Wind (apparent) ---
+    - name: "Boat Wind Apparent Speed"
+      unique_id: "boat_wind_apparent_speed"
+      state_topic: "marine/dashboard/complete"
+      unit_of_measurement: "mph"
+      device_class: wind_speed
+      value_template: >-
+        {% set kn = value_json.wind.apparent.speed_kn | float(0) %}
+        {{ (kn * 1.15078) | round(1) }}
+      availability_topic: "marine/dashboard/complete"
+      availability_template: "{{ 'online' if value_json is defined else 'offline' }}"
+
+    - name: "Boat Wind Apparent Angle"
+      unique_id: "boat_wind_apparent_angle"
+      state_topic: "marine/dashboard/complete"
+      unit_of_measurement: "°"
+      value_template: "{{ value_json.wind.apparent.angle | float(0) | round(1) }}"
+      availability_topic: "marine/dashboard/complete"
+      availability_template: "{{ 'online' if value_json is defined else 'offline' }}"
+
+    # --- Wind (true) ---
+    - name: "Boat Wind True Speed"
+      unique_id: "boat_wind_true_speed"
+      state_topic: "marine/dashboard/complete"
+      unit_of_measurement: "mph"
+      device_class: wind_speed
+      value_template: >-
+        {% set kn = value_json.wind.true.speed_kn | float(0) %}
+        {{ (kn * 1.15078) | round(1) }}
+      availability_topic: "marine/dashboard/complete"
+      availability_template: "{{ 'online' if value_json is defined else 'offline' }}"
+
+    - name: "Boat Wind True Angle"
+      unique_id: "boat_wind_true_angle"
+      state_topic: "marine/dashboard/complete"
+      unit_of_measurement: "°"
+      value_template: "{{ value_json.wind.true.angle | float(0) | round(1) }}"
+      availability_topic: "marine/dashboard/complete"
+      availability_template: "{{ 'online' if value_json is defined else 'offline' }}"
+
+    # --- Temperature: cabin/outside sensor (BLE "outside" tag on the boat) ---
+    # Note: environment.air_temp_c is null in live payload; ble.outside is an
+    # Inkbird BLE sensor placed outside the fridge (cabin ambient).
+    - name: "Boat Temperature"
+      unique_id: "boat_temperature"
+      state_topic: "marine/dashboard/complete"
+      unit_of_measurement: "°F"
+      device_class: temperature
+      value_template: >-
+        {% set c = value_json.ble.outside.temperature_c | float(none) %}
+        {% if c is not none %}{{ (c * 9/5 + 32) | round(1) }}{% else %}unavailable{% endif %}
+      availability_topic: "marine/dashboard/complete"
+      availability_template: "{{ 'online' if value_json is defined else 'offline' }}"
+
+    # --- Temperature: fridge ---
+    - name: "Boat Fridge Temperature"
+      unique_id: "boat_fridge_temperature"
+      state_topic: "marine/dashboard/complete"
+      unit_of_measurement: "°F"
+      device_class: temperature
+      value_template: >-
+        {% set c = value_json.ble.fridge.temperature_c | float(none) %}
+        {% if c is not none %}{{ (c * 9/5 + 32) | round(1) }}{% else %}unavailable{% endif %}
+      availability_topic: "marine/dashboard/complete"
+      availability_template: "{{ 'online' if value_json is defined else 'offline' }}"
+
+    # --- Humidity: fridge and outside BLE sensors ---
+    - name: "Boat Fridge Humidity"
+      unique_id: "boat_fridge_humidity"
+      state_topic: "marine/dashboard/complete"
+      unit_of_measurement: "%"
+      device_class: humidity
+      value_template: "{{ value_json.ble.fridge.humidity_pct | float(0) | round(1) }}"
+      availability_topic: "marine/dashboard/complete"
+      availability_template: "{{ 'online' if value_json is defined else 'offline' }}"
+
+    - name: "Boat Outside Humidity"
+      unique_id: "boat_outside_humidity"
+      state_topic: "marine/dashboard/complete"
+      unit_of_measurement: "%"
+      device_class: humidity
+      value_template: "{{ value_json.ble.outside.humidity_pct | float(0) | round(1) }}"
+      availability_topic: "marine/dashboard/complete"
+      availability_template: "{{ 'online' if value_json is defined else 'offline' }}"
