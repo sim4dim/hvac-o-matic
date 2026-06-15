@@ -153,12 +153,12 @@ views:
                   action: more-info
                   entity: sensor.boat_fridge_temperature
 
-              # Cabin temperature
+              # Outside temperature
               - type: custom:mushroom-template-card
                 primary: >-
                   {% set t = states('sensor.boat_temperature') | float(none) %}
                   {{ (t | round(1) | string) ~ '°F' if t is not none else '—' }}
-                secondary: Cabin temp
+                secondary: Outside temp
                 icon: mdi:thermometer
                 icon_color: >-
                   {% set t = states('sensor.boat_temperature') | float(none) %}

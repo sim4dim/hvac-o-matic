@@ -53,9 +53,9 @@ mqtt:
       device_class: signal_strength
       unit_of_measurement: "dBm"
 
-    # ---- BLE: Outside (cabin ambient) ----
+    # ---- BLE: Outside ----
 
-    - name: "Boat Temperature"
+    - name: "Boat Outside Temperature"
       unique_id: "boat_temperature"
       state_topic: "marine/dashboard/ble/outside/temperature"
       device_class: temperature
