@@ -1,0 +1,217 @@
+title: Boat
+views:
+  - title: Now
+    path: now
+    icon: mdi:sail-boat
+    type: panel
+    cards:
+      - type: vertical-stack
+        cards:
+
+          # ============================================================
+          # ROW 1: HERO — status + last-update chip strip
+          # ============================================================
+          - type: custom:stack-in-card
+            cards:
+              - type: custom:mushroom-template-card
+                primary: >-
+                  {% set s = states('sensor.boat_status') %}
+                  {% set yd = states('binary_sensor.boat_ydwg_connected') %}
+                  {% if s == 'online' and yd == 'on' %}Boat online
+                  {% elif s == 'online' %}Boat online · NMEA gateway offline
+                  {% else %}Boat offline
+                  {% endif %}
+                secondary: >-
+                  {% set ts = states('sensor.boat_last_update') %}
+                  {% if ts in ['unavailable','unknown',''] %}Last update unknown
+                  {% else %}
+                    {% set age_s = (now() - as_datetime(ts)).total_seconds() | int %}
+                    {% if age_s < 60 %}Updated {{ age_s }}s ago
+                    {% elif age_s < 3600 %}Updated {{ (age_s // 60) | int }}m ago
+                    {% else %}Updated {{ (age_s // 3600) | int }}h ago — may be offline
+                    {% endif %}
+                  {% endif %}
+                icon: mdi:sail-boat
+                icon_color: >-
+                  {% set s = states('sensor.boat_status') %}
+                  {% set yd = states('binary_sensor.boat_ydwg_connected') %}
+                  {% set ts = states('sensor.boat_last_update') %}
+                  {% if s != 'online' %}red
+                  {% elif ts not in ['unavailable','unknown',''] and
+                          (now() - as_datetime(ts)).total_seconds() > 300 %}amber
+                  {% elif yd != 'on' %}amber
+                  {% else %}green
+                  {% endif %}
+                tap_action:
+                  action: more-info
+                  entity: sensor.boat_status
+              - type: custom:mushroom-chips-card
+                alignment: center
+                chips:
+                  - type: template
+                    icon: mdi:check-network
+                    content: >-
+                      {% if states('binary_sensor.boat_ydwg_connected') == 'on' %}NMEA OK
+                      {% else %}NMEA off
+                      {% endif %}
+                    icon_color: >-
+                      {% if states('binary_sensor.boat_ydwg_connected') == 'on' %}green
+                      {% else %}red
+                      {% endif %}
+                  - type: template
+                    icon: mdi:clock-outline
+                    content: >-
+                      {% set ts = states('sensor.boat_last_update') %}
+                      {% if ts in ['unavailable','unknown',''] %}—
+                      {% else %}
+                        {% set age_s = (now() - as_datetime(ts)).total_seconds() | int %}
+                        {% if age_s < 60 %}{{ age_s }}s ago
+                        {% elif age_s < 3600 %}{{ (age_s // 60) | int }}m ago
+                        {% else %}{{ (age_s // 3600) | int }}h ago
+                        {% endif %}
+                      {% endif %}
+                    icon_color: >-
+                      {% set ts = states('sensor.boat_last_update') %}
+                      {% if ts in ['unavailable','unknown',''] %}grey
+                      {% elif (now() - as_datetime(ts)).total_seconds() > 300 %}red
+                      {% elif (now() - as_datetime(ts)).total_seconds() > 120 %}amber
+                      {% else %}green
+                      {% endif %}
+
+          # ============================================================
+          # ROW 2: WIND — apparent (lead) + true
+          # ============================================================
+          - type: horizontal-stack
+            cards:
+
+              # Apparent wind tile
+              - type: custom:mushroom-template-card
+                primary: >-
+                  {% set spd = states('sensor.boat_wind_apparent_speed') | float(none) %}
+                  {% set ang = states('sensor.boat_wind_apparent_angle') | float(none) %}
+                  {% if spd is none %}Apparent wind —
+                  {% else %}
+                    {% set a = ang | abs if ang is not none else none %}
+                    {% set side = 'stbd' if (ang is not none and ang >= 0) else 'port' %}
+                    {% if a is none %}{{ spd | round(1) }} kn
+                    {% else %}{{ spd | round(1) }} kn · {{ a | round(0) }}° {{ side }}
+                    {% endif %}
+                  {% endif %}
+                secondary: Apparent wind
+                icon: mdi:weather-windy
+                icon_color: >-
+                  {% set spd = states('sensor.boat_wind_apparent_speed') | float(0) %}
+                  {{ 'blue' if spd < 5 else 'teal' if spd < 12 else 'amber' if spd < 20 else 'red' }}
+                tap_action:
+                  action: more-info
+                  entity: sensor.boat_wind_apparent_speed
+
+              # True wind tile
+              - type: custom:mushroom-template-card
+                primary: >-
+                  {% set spd = states('sensor.boat_wind_true_speed') | float(none) %}
+                  {% set ang = states('sensor.boat_wind_true_angle') | float(none) %}
+                  {% if spd is none %}True wind —
+                  {% else %}
+                    {% set a = ang | abs if ang is not none else none %}
+                    {% set side = 'stbd' if (ang is not none and ang >= 0) else 'port' %}
+                    {% if a is none %}{{ spd | round(1) }} kn
+                    {% else %}{{ spd | round(1) }} kn · {{ a | round(0) }}° {{ side }}
+                    {% endif %}
+                  {% endif %}
+                secondary: True wind
+                icon: mdi:weather-windy-variant
+                icon_color: >-
+                  {% set spd = states('sensor.boat_wind_true_speed') | float(0) %}
+                  {{ 'blue' if spd < 5 else 'teal' if spd < 12 else 'amber' if spd < 20 else 'red' }}
+                tap_action:
+                  action: more-info
+                  entity: sensor.boat_wind_true_speed
+
+          # ============================================================
+          # ROW 3: TEMPERATURES
+          # ============================================================
+          - type: horizontal-stack
+            cards:
+
+              # Fridge temperature
+              - type: custom:mushroom-template-card
+                primary: >-
+                  {% set t = states('sensor.boat_fridge_temperature') | float(none) %}
+                  {{ (t | round(1) | string) ~ '°F' if t is not none else '—' }}
+                secondary: Fridge temp
+                icon: mdi:fridge-outline
+                icon_color: >-
+                  {% set t = states('sensor.boat_fridge_temperature') | float(none) %}
+                  {% if t is none %}grey
+                  {% elif t < 34 %}blue
+                  {% elif t < 40 %}green
+                  {% elif t < 45 %}amber
+                  {% else %}red
+                  {% endif %}
+                tap_action:
+                  action: more-info
+                  entity: sensor.boat_fridge_temperature
+
+              # Cabin temperature
+              - type: custom:mushroom-template-card
+                primary: >-
+                  {% set t = states('sensor.boat_temperature') | float(none) %}
+                  {{ (t | round(1) | string) ~ '°F' if t is not none else '—' }}
+                secondary: Cabin temp
+                icon: mdi:thermometer
+                icon_color: >-
+                  {% set t = states('sensor.boat_temperature') | float(none) %}
+                  {% if t is none %}grey
+                  {% elif t < 50 %}blue
+                  {% elif t < 65 %}light-blue
+                  {% elif t < 78 %}green
+                  {% elif t < 85 %}amber
+                  {% else %}red
+                  {% endif %}
+                tap_action:
+                  action: more-info
+                  entity: sensor.boat_temperature
+
+          # ============================================================
+          # ROW 4: HUMIDITY
+          # ============================================================
+          - type: horizontal-stack
+            cards:
+
+              # Fridge humidity
+              - type: custom:mushroom-template-card
+                primary: >-
+                  {% set h = states('sensor.boat_fridge_humidity') | float(none) %}
+                  {{ (h | round(0) | int | string) ~ '%' if h is not none else '—' }}
+                secondary: Fridge RH
+                icon: mdi:water-percent
+                icon_color: >-
+                  {% set h = states('sensor.boat_fridge_humidity') | float(none) %}
+                  {% if h is none %}grey
+                  {% elif h < 50 %}green
+                  {% elif h < 70 %}amber
+                  {% else %}red
+                  {% endif %}
+                tap_action:
+                  action: more-info
+                  entity: sensor.boat_fridge_humidity
+
+              # Cabin/outside humidity
+              - type: custom:mushroom-template-card
+                primary: >-
+                  {% set h = states('sensor.boat_outside_humidity') | float(none) %}
+                  {{ (h | round(0) | int | string) ~ '%' if h is not none else '—' }}
+                secondary: Cabin/Outside RH
+                icon: mdi:water-percent
+                icon_color: >-
+                  {% set h = states('sensor.boat_outside_humidity') | float(none) %}
+                  {% if h is none %}grey
+                  {% elif h < 55 %}green
+                  {% elif h < 75 %}teal
+                  {% elif h < 85 %}amber
+                  {% else %}red
+                  {% endif %}
+                tap_action:
+                  action: more-info
+                  entity: sensor.boat_outside_humidity
