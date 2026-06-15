@@ -168,3 +168,22 @@ mqtt:
       state_topic: "marine/dashboard/autopilot/active"
       payload_on: "true"
       payload_off: "false"
+
+  device_tracker:
+    # GPS position from the marine/dashboard/complete JSON blob.
+    # navigation.lat / navigation.lon confirmed live (43.218883 / -86.3215) 2026-06-14.
+    # The latitude/longitude/gps_accuracy/source_type attributes cause HA to
+    # render this tracker on the Map dashboard and any map card.
+    - name: "Boat"
+      unique_id: "boat_gps"
+      state_topic: "marine/dashboard/complete"
+      value_template: >-
+        {{ 'home' if (value_json.navigation.lat is defined
+                      and value_json.navigation.lat is not none)
+           else 'not_home' }}
+      json_attributes_topic: "marine/dashboard/complete"
+      json_attributes_template: >-
+        {{ {'latitude': value_json.navigation.lat,
+            'longitude': value_json.navigation.lon,
+            'gps_accuracy': 10,
+            'source_type': 'gps'} | tojson }}
