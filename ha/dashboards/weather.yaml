@@ -330,6 +330,10 @@ views:
                 forecast_type: daily
                 show_current: false
                 show_forecast: true
+              - type: iframe
+                url: >-
+                  https://www.rainviewer.com/map.html?loc=42.97008693,-85.55674459,8&oFa=0&oC=0&oU=0&oCS=1&oF=0&oAP=1&rmt=2&c=3&o=83&lm=1&layer=radar&sm=1&sn=1
+                aspect_ratio: "16:9"
 
           # ============================================================
           # ROW 4: 24h TRENDS — two charts side-by-side
