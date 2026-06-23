@@ -6,7 +6,7 @@ Controls Keen smart vents via Hubitat integration (Zigbee radios on Hubitat).
 HVAC furnace controlled directly via HTTP to Flask server (bypasses Hubitat).
 First floor servo register controlled via ESPHome native API (number entity).
 
-Version: 2.5.0
+Version: 2.6.0 — Flask→ESPHome cutover: _hvac_push() now drives ESPHome switches directly
 """
 
 import datetime as dt_mod
@@ -717,71 +717,54 @@ def _restore_setpoint_log():
 # HVAC furnace control
 # ---------------------------------------------------------------------------
 def _hvac_push(button):
-    """Send HVAC command directly to Flask server with retry."""
-    path = HVAC_COMMANDS.get(button)
-    if path is None:
+    """Send HVAC command to ESPHome controller via HA switch entities."""
+    actions = ESPHOME_MIRROR_MAP.get(button)
+    if actions is None:
         log.error(f"keenect: unknown HVAC button {button}")
         return False
-    url = f"{HVAC_SERVER}/0{path}"
-    for attempt in range(3):
-        try:
-            task.executor(urllib.request.urlopen, url, None, 5)
-            if attempt > 0:
-                log.info(f"keenect: HVAC GET {url} (retry {attempt} ok)")
-            else:
-                log.info(f"keenect: HVAC GET {url}")
-            _hvac_esphome_mirror(button)
-            _st["push_fail_count"] = 0
-            return True
-        except Exception as e:
-            log.warning(f"keenect: HVAC {url} attempt {attempt+1} failed: {e}")
-            if attempt < 2:
-                task.sleep(1)
-    log.error(f"keenect: HVAC command {url} FAILED after 3 attempts")
-    _st["push_fail_count"] = _st.get("push_fail_count", 0) + 1
-    fc = _st["push_fail_count"]
-    if fc >= 5:
-        log.error(f"keenect: {fc} consecutive push failures, disabling keenect")
-        try:
-            persistent_notification.create(
-                title="Keenect: HVAC Push CRITICAL",
-                message=f"{fc} consecutive HVAC push commands failed. "
-                        f"Keenect has been disabled. Check Flask server at {HVAC_SERVER}.",
-                notification_id="keenect_push_fail",
-            )
-        except Exception:
-            pass
-        try:
-            input_boolean.turn_off(entity_id="input_boolean.keenect_enabled")
-        except Exception as e2:
-            log.error(f"keenect: failed to disable keenect: {e2}")
-    elif fc >= 3:
-        log.warning(f"keenect: {fc} consecutive push failures")
-        try:
-            persistent_notification.create(
-                title="Keenect: HVAC Push Failures",
-                message=f"{fc} consecutive HVAC push commands failed. "
-                        f"Check Flask server at {HVAC_SERVER}.",
-                notification_id="keenect_push_fail",
-            )
-        except Exception:
-            pass
-    return False
-
-
-def _hvac_esphome_mirror(button):
-    """Send relay commands to ESPHome test controller via HA switches."""
-    actions = ESPHOME_MIRROR_MAP.get(button)
-    if not actions:
-        return
+    failed = []
     for action, entity in actions:
         try:
             if action == "turn_on":
                 switch.turn_on(entity_id=entity)
             else:
                 switch.turn_off(entity_id=entity)
+            log.info(f"keenect: ESPHome {action} {entity}")
         except Exception as e:
-            log.warning(f"keenect: ESPHome mirror {entity} failed: {e}")
+            log.error(f"keenect: ESPHome {action} {entity} FAILED: {e}")
+            failed.append(entity)
+    if failed:
+        _st["push_fail_count"] = _st.get("push_fail_count", 0) + 1
+        fc = _st["push_fail_count"]
+        log.error(f"keenect: ESPHome push failed for {failed} (fail count: {fc})")
+        if fc >= 5:
+            try:
+                persistent_notification.create(
+                    title="Keenect: ESPHome Push CRITICAL",
+                    message=f"{fc} consecutive HVAC push commands failed. Keenect disabled. Check ESP32 hvac-controller.local.",
+                    notification_id="keenect_push_fail")
+            except Exception:
+                pass
+            try:
+                input_boolean.turn_off(entity_id="input_boolean.keenect_enabled")
+            except Exception as e2:
+                log.error(f"keenect: failed to disable keenect: {e2}")
+        elif fc >= 3:
+            try:
+                persistent_notification.create(
+                    title="Keenect: ESPHome Push Failures",
+                    message=f"{fc} consecutive HVAC push commands failed. Check ESP32 hvac-controller.local.",
+                    notification_id="keenect_push_fail")
+            except Exception:
+                pass
+        return False
+    _st["push_fail_count"] = 0
+    return True
+
+
+def _hvac_esphome_mirror(button):
+    """No-op: ESPHome is now the primary control path (cutover from Flask)."""
+    pass
 
 
 def _outdoor_temp():
