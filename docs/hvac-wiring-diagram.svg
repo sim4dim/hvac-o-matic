@@ -1,0 +1,269 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1070" viewBox="0 0 1200 1070">
+
+  <!-- background -->
+  <g id="background">
+    <rect width="1200" height="1070" fill="white"/>
+  </g>
+
+  <!-- title -->
+  <g id="title">
+    <text x="600" y="38" font-size="24" font-weight="bold" text-anchor="middle" fill="#212121" font-family="sans-serif">ESP32 HVAC Controller &#x2014; Relay Board Wiring</text>
+  </g>
+
+  <!-- r-bus: 24V R bus horizontal red bar -->
+  <g id="r-bus">
+    <line x1="110" y1="78" x2="1050" y2="78" stroke="#d32f2f" stroke-width="4"/>
+    <circle cx="110" cy="78" r="7" fill="#d32f2f"/>
+    <text x="110" y="65" font-size="10" text-anchor="middle" fill="#d32f2f" font-family="sans-serif">FURNACE R</text>
+    <circle cx="1050" cy="78" r="7" fill="#d32f2f"/>
+    <text x="1050" y="65" font-size="10" text-anchor="middle" fill="#d32f2f" font-family="sans-serif">PEARL R</text>
+    <text x="580" y="68" font-size="13" font-weight="bold" text-anchor="middle" fill="#d32f2f" font-family="sans-serif">24V (R) BUS</text>
+    <!-- vertical red spine connecting all 3 call relay COMs -->
+    <line x1="535" y1="78" x2="535" y2="570" stroke="#d32f2f" stroke-width="2.5"/>
+    <circle cx="535" cy="78" r="5" fill="#d32f2f"/>
+    <circle cx="535" cy="208" r="5" fill="#d32f2f"/>
+    <circle cx="535" cy="388" r="5" fill="#d32f2f"/>
+    <circle cx="535" cy="568" r="5" fill="#d32f2f"/>
+  </g>
+
+  <!-- band-heat: HEAT W band -->
+  <g id="band-heat">
+    <!-- band background -->
+    <rect x="45" y="105" width="1110" height="140" fill="#f3f8ff" stroke="#90caf9" stroke-width="1" rx="8"/>
+    <text x="65" y="118" font-size="14" font-weight="bold" fill="#555" font-family="sans-serif">HEAT &#x2014; W</text>
+
+    <!-- Furnace W terminal -->
+    <rect x="55" y="157" width="100" height="36" fill="#e3f2fd" stroke="#1565c0" stroke-width="1.5" rx="3"/>
+    <text x="105" y="170" font-size="9" font-weight="bold" fill="#1565c0" text-anchor="middle" font-family="sans-serif">FURNACE</text>
+    <text x="105" y="184" font-size="13" font-weight="bold" fill="#222222" text-anchor="middle" font-family="sans-serif">W</text>
+    <circle cx="155" cy="175" r="7" fill="#222222" stroke="#000" stroke-width="1"/>
+
+    <!-- Changeover relay R5 -->
+    <rect x="200" y="135" width="220" height="80" fill="#e8f5e9" stroke="#1b5e20" stroke-width="1.5" rx="4"/>
+    <text x="310" y="153" font-size="12" font-weight="bold" fill="#1b5e20" text-anchor="middle" font-family="sans-serif">R5 HEAT-SW</text>
+    <text x="310" y="169" font-size="10" fill="#555" text-anchor="middle" font-family="sans-serif">GPIO 15</text>
+    <!-- NC terminal (purple) -->
+    <text x="230" y="198" font-size="9" text-anchor="middle" fill="#9c27b0" font-family="sans-serif">NC</text>
+    <circle cx="230" cy="208" r="7" fill="#9c27b0"/>
+    <!-- COM terminal -->
+    <text x="310" y="198" font-size="9" text-anchor="middle" fill="#555" font-family="sans-serif">COM</text>
+    <circle cx="310" cy="208" r="7" fill="#222222"/>
+    <!-- NO terminal -->
+    <text x="410" y="198" font-size="9" text-anchor="middle" fill="#555" font-family="sans-serif">NO</text>
+    <circle cx="410" cy="208" r="7" fill="#222222"/>
+
+    <!-- Call relay R1 -->
+    <rect x="490" y="135" width="210" height="80" fill="#ffccbc" stroke="#bf360c" stroke-width="1.5" rx="4"/>
+    <text x="595" y="153" font-size="12" font-weight="bold" fill="#bf360c" text-anchor="middle" font-family="sans-serif">R1 HEAT</text>
+    <text x="595" y="169" font-size="10" fill="#555" text-anchor="middle" font-family="sans-serif">GPIO 4</text>
+    <!-- COM terminal (red, taps R-bus) -->
+    <text x="535" y="198" font-size="9" text-anchor="middle" fill="#d32f2f" font-family="sans-serif">COM</text>
+    <circle cx="535" cy="208" r="7" fill="#d32f2f"/>
+    <!-- NO terminal -->
+    <text x="690" y="198" font-size="9" text-anchor="middle" fill="#555" font-family="sans-serif">NO</text>
+    <circle cx="690" cy="208" r="7" fill="#222222"/>
+
+    <!-- Pearl W terminal -->
+    <rect x="1045" y="157" width="105" height="36" fill="#f3e5f5" stroke="#6a1b9a" stroke-width="1.5" rx="3"/>
+    <text x="1097" y="170" font-size="9" font-weight="bold" fill="#6a1b9a" text-anchor="middle" font-family="sans-serif">PEARL</text>
+    <text x="1097" y="184" font-size="13" font-weight="bold" fill="#222222" text-anchor="middle" font-family="sans-serif">W</text>
+    <circle cx="1045" cy="175" r="7" fill="#222222" stroke="#000" stroke-width="1"/>
+
+    <!-- Wire A: Furnace W -> R5.COM (routed at y=182) -->
+    <path d="M 155,175 V 182 H 310 V 208" stroke="#222222" stroke-width="2.5" fill="none"/>
+    <!-- Wire B: Pearl W -> R5.NC (routed at y=168), labeled FAILSAFE -->
+    <path d="M 1045,175 V 168 H 230 V 208" stroke="#222222" stroke-width="2.5" fill="none"/>
+    <text x="700" y="163" font-size="9" fill="#6a1b9a" text-anchor="middle" font-family="sans-serif">FAILSAFE</text>
+
+    <!-- Wire C: R1.NO -> R5.NO (ESP32 call jumper) - BOLD solid W color -->
+    <path d="M 690,208 V 228 H 410 V 208" stroke="#222222" stroke-width="4" fill="none"/>
+    <!-- Junction dots at both endpoints -->
+    <circle cx="690" cy="208" r="6" fill="#222222"/>
+    <circle cx="410" cy="208" r="6" fill="#222222"/>
+    <text x="550" y="243" font-size="10" fill="#222222" text-anchor="middle" font-family="sans-serif">ESP32 heat</text>
+  </g>
+
+  <!-- band-cool: COOL Y band -->
+  <g id="band-cool">
+    <!-- band background -->
+    <rect x="45" y="285" width="1110" height="140" fill="#fffde7" stroke="#ffe082" stroke-width="1" rx="8"/>
+    <text x="65" y="298" font-size="14" font-weight="bold" fill="#555" font-family="sans-serif">COOL &#x2014; Y</text>
+
+    <!-- Furnace Y terminal -->
+    <rect x="55" y="337" width="100" height="36" fill="#e3f2fd" stroke="#1565c0" stroke-width="1.5" rx="3"/>
+    <text x="105" y="350" font-size="9" font-weight="bold" fill="#1565c0" text-anchor="middle" font-family="sans-serif">FURNACE</text>
+    <text x="105" y="364" font-size="13" font-weight="bold" fill="#f5b700" text-anchor="middle" font-family="sans-serif">Y</text>
+    <!-- Yellow terminal circle with dark outline -->
+    <circle cx="155" cy="355" r="7" fill="#f5b700" stroke="#222222" stroke-width="1.5"/>
+
+    <!-- Changeover relay R6 -->
+    <rect x="200" y="315" width="220" height="80" fill="#e8f5e9" stroke="#1b5e20" stroke-width="1.5" rx="4"/>
+    <text x="310" y="333" font-size="12" font-weight="bold" fill="#1b5e20" text-anchor="middle" font-family="sans-serif">R6 COOL-SW</text>
+    <text x="310" y="349" font-size="10" fill="#555" text-anchor="middle" font-family="sans-serif">GPIO 16</text>
+    <!-- NC terminal (purple) -->
+    <text x="230" y="378" font-size="9" text-anchor="middle" fill="#9c27b0" font-family="sans-serif">NC</text>
+    <circle cx="230" cy="388" r="7" fill="#9c27b0"/>
+    <!-- COM terminal -->
+    <text x="310" y="378" font-size="9" text-anchor="middle" fill="#555" font-family="sans-serif">COM</text>
+    <circle cx="310" cy="388" r="7" fill="#f5b700" stroke="#222222" stroke-width="1.5"/>
+    <!-- NO terminal -->
+    <text x="410" y="378" font-size="9" text-anchor="middle" fill="#555" font-family="sans-serif">NO</text>
+    <circle cx="410" cy="388" r="7" fill="#f5b700" stroke="#222222" stroke-width="1.5"/>
+
+    <!-- Call relay R2 -->
+    <rect x="490" y="315" width="210" height="80" fill="#ffccbc" stroke="#bf360c" stroke-width="1.5" rx="4"/>
+    <text x="595" y="333" font-size="12" font-weight="bold" fill="#bf360c" text-anchor="middle" font-family="sans-serif">R2 COOL</text>
+    <text x="595" y="349" font-size="10" fill="#555" text-anchor="middle" font-family="sans-serif">GPIO 5</text>
+    <!-- COM terminal (red, taps R-bus) -->
+    <text x="535" y="378" font-size="9" text-anchor="middle" fill="#d32f2f" font-family="sans-serif">COM</text>
+    <circle cx="535" cy="388" r="7" fill="#d32f2f"/>
+    <!-- NO terminal -->
+    <text x="690" y="378" font-size="9" text-anchor="middle" fill="#555" font-family="sans-serif">NO</text>
+    <circle cx="690" cy="388" r="7" fill="#f5b700" stroke="#222222" stroke-width="1.5"/>
+
+    <!-- Pearl Y terminal -->
+    <rect x="1045" y="337" width="105" height="36" fill="#f3e5f5" stroke="#6a1b9a" stroke-width="1.5" rx="3"/>
+    <text x="1097" y="350" font-size="9" font-weight="bold" fill="#6a1b9a" text-anchor="middle" font-family="sans-serif">PEARL</text>
+    <text x="1097" y="364" font-size="13" font-weight="bold" fill="#f5b700" text-anchor="middle" font-family="sans-serif">Y</text>
+    <!-- Yellow terminal circle with dark outline -->
+    <circle cx="1045" cy="355" r="7" fill="#f5b700" stroke="#222222" stroke-width="1.5"/>
+
+    <!-- Wire A: Furnace Y -> R6.COM (two-pass for yellow outline, routed at y=362) -->
+    <path d="M 155,355 V 362 H 310 V 388" stroke="#222222" stroke-width="4.5" fill="none"/>
+    <path d="M 155,355 V 362 H 310 V 388" stroke="#f5b700" stroke-width="2.5" fill="none"/>
+    <!-- Wire B: Pearl Y -> R6.NC (two-pass for yellow outline, routed at y=348), labeled FAILSAFE -->
+    <path d="M 1045,355 V 348 H 230 V 388" stroke="#222222" stroke-width="4.5" fill="none"/>
+    <path d="M 1045,355 V 348 H 230 V 388" stroke="#f5b700" stroke-width="2.5" fill="none"/>
+    <text x="700" y="343" font-size="9" fill="#6a1b9a" text-anchor="middle" font-family="sans-serif">FAILSAFE</text>
+
+    <!-- Wire C: R2.NO -> R6.NO (ESP32 call jumper) - two-pass yellow, BOLD -->
+    <path d="M 690,388 V 408 H 410 V 388" stroke="#222222" stroke-width="4.5" fill="none"/>
+    <path d="M 690,388 V 408 H 410 V 388" stroke="#f5b700" stroke-width="2.5" fill="none"/>
+    <!-- Junction dots at both endpoints (yellow with dark outline) -->
+    <circle cx="690" cy="388" r="6" fill="#f5b700" stroke="#222222" stroke-width="1.5"/>
+    <circle cx="410" cy="388" r="6" fill="#f5b700" stroke="#222222" stroke-width="1.5"/>
+    <text x="550" y="423" font-size="10" fill="#f5b700" text-anchor="middle" font-family="sans-serif" stroke="#222222" stroke-width="0.3">ESP32 cool</text>
+  </g>
+
+  <!-- band-fan: FAN G band -->
+  <g id="band-fan">
+    <!-- band background -->
+    <rect x="45" y="465" width="1110" height="140" fill="#f1f8e9" stroke="#a5d6a7" stroke-width="1" rx="8"/>
+    <text x="65" y="478" font-size="14" font-weight="bold" fill="#555" font-family="sans-serif">FAN &#x2014; G</text>
+
+    <!-- Furnace G terminal -->
+    <rect x="55" y="517" width="100" height="36" fill="#e3f2fd" stroke="#1565c0" stroke-width="1.5" rx="3"/>
+    <text x="105" y="530" font-size="9" font-weight="bold" fill="#1565c0" text-anchor="middle" font-family="sans-serif">FURNACE</text>
+    <text x="105" y="544" font-size="13" font-weight="bold" fill="#388e3c" text-anchor="middle" font-family="sans-serif">G</text>
+    <circle cx="155" cy="535" r="7" fill="#388e3c" stroke="#000" stroke-width="1"/>
+
+    <!-- Changeover relay R7 -->
+    <rect x="200" y="495" width="220" height="80" fill="#e8f5e9" stroke="#1b5e20" stroke-width="1.5" rx="4"/>
+    <text x="310" y="513" font-size="12" font-weight="bold" fill="#1b5e20" text-anchor="middle" font-family="sans-serif">R7 FAN-SW</text>
+    <text x="310" y="529" font-size="10" fill="#555" text-anchor="middle" font-family="sans-serif">GPIO 17</text>
+    <!-- NC terminal (purple) -->
+    <text x="230" y="558" font-size="9" text-anchor="middle" fill="#9c27b0" font-family="sans-serif">NC</text>
+    <circle cx="230" cy="568" r="7" fill="#9c27b0"/>
+    <!-- COM terminal -->
+    <text x="310" y="558" font-size="9" text-anchor="middle" fill="#555" font-family="sans-serif">COM</text>
+    <circle cx="310" cy="568" r="7" fill="#388e3c"/>
+    <!-- NO terminal -->
+    <text x="410" y="558" font-size="9" text-anchor="middle" fill="#555" font-family="sans-serif">NO</text>
+    <circle cx="410" cy="568" r="7" fill="#388e3c"/>
+
+    <!-- Call relay R3 -->
+    <rect x="490" y="495" width="210" height="80" fill="#ffccbc" stroke="#bf360c" stroke-width="1.5" rx="4"/>
+    <text x="595" y="513" font-size="12" font-weight="bold" fill="#bf360c" text-anchor="middle" font-family="sans-serif">R3 FAN</text>
+    <text x="595" y="529" font-size="10" fill="#555" text-anchor="middle" font-family="sans-serif">GPIO 6</text>
+    <!-- COM terminal (red, taps R-bus) -->
+    <text x="535" y="558" font-size="9" text-anchor="middle" fill="#d32f2f" font-family="sans-serif">COM</text>
+    <circle cx="535" cy="568" r="7" fill="#d32f2f"/>
+    <!-- NO terminal -->
+    <text x="690" y="558" font-size="9" text-anchor="middle" fill="#555" font-family="sans-serif">NO</text>
+    <circle cx="690" cy="568" r="7" fill="#388e3c"/>
+
+    <!-- Pearl G terminal -->
+    <rect x="1045" y="517" width="105" height="36" fill="#f3e5f5" stroke="#6a1b9a" stroke-width="1.5" rx="3"/>
+    <text x="1097" y="530" font-size="9" font-weight="bold" fill="#6a1b9a" text-anchor="middle" font-family="sans-serif">PEARL</text>
+    <text x="1097" y="544" font-size="13" font-weight="bold" fill="#388e3c" text-anchor="middle" font-family="sans-serif">G</text>
+    <circle cx="1045" cy="535" r="7" fill="#388e3c" stroke="#000" stroke-width="1"/>
+
+    <!-- Wire A: Furnace G -> R7.COM (routed at y=542) -->
+    <path d="M 155,535 V 542 H 310 V 568" stroke="#388e3c" stroke-width="2.5" fill="none"/>
+    <!-- Wire B: Pearl G -> R7.NC (routed at y=528), labeled FAILSAFE -->
+    <path d="M 1045,535 V 528 H 230 V 568" stroke="#388e3c" stroke-width="2.5" fill="none"/>
+    <text x="700" y="523" font-size="9" fill="#6a1b9a" text-anchor="middle" font-family="sans-serif">FAILSAFE</text>
+
+    <!-- Wire C: R3.NO -> R7.NO (ESP32 call jumper) - BOLD solid G color -->
+    <path d="M 690,568 V 588 H 410 V 568" stroke="#388e3c" stroke-width="4" fill="none"/>
+    <!-- Junction dots at both endpoints -->
+    <circle cx="690" cy="568" r="6" fill="#388e3c"/>
+    <circle cx="410" cy="568" r="6" fill="#388e3c"/>
+    <text x="550" y="603" font-size="10" fill="#388e3c" text-anchor="middle" font-family="sans-serif">ESP32 fan</text>
+  </g>
+
+  <!-- c-bus: C common bus -->
+  <g id="c-bus">
+    <line x1="110" y1="650" x2="1050" y2="650" stroke="#1976d2" stroke-width="2.5"/>
+    <circle cx="110" cy="650" r="7" fill="#1976d2"/>
+    <text x="110" y="638" font-size="9" text-anchor="middle" fill="#1976d2" font-family="sans-serif">FURNACE C</text>
+    <circle cx="1050" cy="650" r="7" fill="#1976d2"/>
+    <text x="1050" y="638" font-size="9" text-anchor="middle" fill="#1976d2" font-family="sans-serif">PEARL C</text>
+    <text x="580" y="665" font-size="12" fill="#1976d2" text-anchor="middle" font-family="sans-serif">C &#x2014; dedicated transformer common (~27VAC)</text>
+    <!-- Furnace C annotation: furnace blue C wire is unused/capped -->
+    <text x="55" y="683" font-size="9" fill="#777" font-family="sans-serif">furnace blue C wire:</text>
+    <text x="55" y="694" font-size="9" fill="#777" font-family="sans-serif">UNUSED / capped</text>
+    <text x="55" y="705" font-size="9" fill="#777" font-family="sans-serif">(reads phantom ~14V)</text>
+  </g>
+
+  <!-- legend -->
+  <g id="legend">
+    <rect x="730" y="90" width="200" height="90" fill="white" stroke="#aaa" stroke-width="1" rx="4"/>
+    <text x="750" y="107" font-size="11" font-weight="bold" font-family="sans-serif" fill="#333">LEGEND</text>
+    <circle cx="750" cy="120" r="5" fill="#d32f2f"/>
+    <text x="762" y="124" font-size="10" font-family="sans-serif" fill="#333">24V R (red)</text>
+    <circle cx="750" cy="138" r="5" fill="#1976d2"/>
+    <text x="762" y="142" font-size="10" font-family="sans-serif" fill="#333">C common (blue)</text>
+    <circle cx="750" cy="156" r="5" fill="#9c27b0"/>
+    <text x="762" y="160" font-size="10" font-family="sans-serif" fill="#333">NC = Pearl bypass</text>
+    <line x1="870" y1="124" x2="890" y2="124" stroke="#d32f2f" stroke-width="2.5"/>
+  </g>
+
+  <!-- pearl2: Pearl #2 power-only box with R and C taps -->
+  <g id="pearl2">
+    <!-- R wire tap: vertical from R-bus at x=950,y=78 down to y=730, then left to terminal -->
+    <circle cx="950" cy="78" r="4" fill="#d32f2f"/>
+    <path d="M 950,78 V 730 H 820" stroke="#d32f2f" stroke-width="2" fill="none"/>
+    <!-- C wire tap: vertical from C-bus at x=950,y=650 down to y=765, then left to terminal -->
+    <circle cx="950" cy="650" r="4" fill="#1976d2"/>
+    <path d="M 950,650 V 765 H 820" stroke="#1976d2" stroke-width="2" fill="none"/>
+    <!-- Pearl #2 box -->
+    <rect x="780" y="678" width="310" height="120" fill="#f3e5f5" stroke="#6a1b9a" stroke-width="1.5" rx="4"/>
+    <text x="935" y="698" font-size="12" font-weight="bold" fill="#6a1b9a" text-anchor="middle" font-family="sans-serif">PEARL #2 (power only)</text>
+    <!-- R terminal -->
+    <text x="820" y="720" font-size="10" text-anchor="middle" fill="#d32f2f" font-family="sans-serif">R</text>
+    <circle cx="820" cy="730" r="7" fill="#d32f2f"/>
+    <!-- C terminal -->
+    <text x="820" y="755" font-size="10" text-anchor="middle" fill="#1976d2" font-family="sans-serif">C</text>
+    <circle cx="820" cy="765" r="7" fill="#1976d2"/>
+    <!-- Note lines -->
+    <text x="790" y="785" font-size="9" fill="#555" font-family="sans-serif">W/Y/G left disconnected</text>
+    <text x="790" y="797" font-size="9" fill="#555" font-family="sans-serif">&amp; capped &#x2014; powered only,</text>
+    <text x="790" y="809" font-size="9" fill="#555" font-family="sans-serif">cannot drive furnace.</text>
+  </g>
+
+  <!-- notes -->
+  <g id="notes">
+    <rect x="45" y="875" width="1110" height="190" fill="#f9f9f9" stroke="#aaa" stroke-width="1" rx="6"/>
+    <text x="65" y="895" font-size="12" font-weight="bold" fill="#333" font-family="sans-serif">NOTES</text>
+    <text x="65" y="913" font-size="11" fill="#444" font-family="sans-serif">energized &#x2192; NO contact = ESP32 drive (NORMAL) &#xB7; de-energized &#x2192; NC contact = Pearl thermostat (BYPASS / failsafe)</text>
+    <text x="65" y="931" font-size="11" fill="#444" font-family="sans-serif">GPIO map: R1=4  R2=5  R3=6  R4=7(UV lamp)  R5=15  R6=16  R7=17  R8=18(spare, unwired)</text>
+    <text x="65" y="949" font-size="11" fill="#444" font-family="sans-serif">Bypass switch = GPIO 11  &#xB7;  Warning LED = GPIO 10  &#xB7;  I&#xB2;C SDA = GPIO 8  &#xB7;  I&#xB2;C SCL = GPIO 9</text>
+    <text x="65" y="967" font-size="11" fill="#444" font-family="sans-serif">Board is active-low with on-board pull-ups &#x2014; relay coil energized by pulling GPIO LOW</text>
+    <text x="65" y="985" font-size="11" fill="#444" font-family="sans-serif">R4 = UV lamp relay (unwired in this diagram)  &#xB7;  R8 = spare relay (unwired)</text>
+    <text x="65" y="1003" font-size="11" fill="#444" font-family="sans-serif">FAILSAFE: if ESP32 loses power/crashes, changeover relays R5/R6/R7 de-energize &#x2192; Pearl thermostat resumes direct control</text>
+    <text x="65" y="1021" font-size="11" fill="#444" font-family="sans-serif">R1&#x2013;R3 (call relays): use COM + NO only (NC unused)  &#xB7;  R5&#x2013;R7 (changeover): use all three &#x2014; COM + NO + NC</text>
+  </g>
+
+</svg>
