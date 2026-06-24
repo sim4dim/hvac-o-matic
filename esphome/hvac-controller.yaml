@@ -321,11 +321,14 @@ interval:
             r = 255; g = 0; b = 0;
           } else if (id(cool_sw).state) {
             r = 0; g = 0; b = 255;
+          } else if (id(fan_sw).state) {
+            r = 0; g = 255; b = 255;   // circulating / recirc (fan only) = cyan
           } else {
-            r = 0; g = 255; b = 0;
+            r = 0; g = 255; b = 0;     // idle = green
           }
+          // status LED dimmed 30% (scale 0.7)
           auto out = (esphome::light::AddressableLight *)led->get_output();
-          out->get(0) = Color(r, g, b);
+          out->get(0) = Color((uint8_t)(r * 0.7f), (uint8_t)(g * 0.7f), (uint8_t)(b * 0.7f));
           out->schedule_show();
 
 # ---------------------------------------------------------------------------
@@ -410,6 +413,11 @@ switch:
     id: fan_sw
     icon: "mdi:fan"
     restore_mode: ALWAYS_OFF
+    # UV mirrors airflow: on whenever the fan runs (heat, cool, recirc, or continuous circulation)
+    on_turn_on:
+      - switch.turn_on: uv_sw
+    on_turn_off:
+      - switch.turn_off: uv_sw
 
   - platform: gpio
     pin:
@@ -604,6 +612,9 @@ sensor:
       }
       return {};
     update_interval: 30s
+    filters:
+      # idle calibration 2026-06-23: zero deltas on idle baseline
+      - offset: -0.123
 
   # Computed: temperature delta (supply - return)
   - platform: template
@@ -614,10 +625,30 @@ sensor:
     accuracy_decimals: 1
     lambda: |-
       if (id(supply_temp).has_state() && id(return_temp).has_state()) {
-        return id(supply_temp).state - id(return_temp).state;
+        return (id(supply_temp).state - id(return_temp).state) * 1.8;  // °C diff -> °F
       }
       return {};
     update_interval: 30s
+    filters:
+      # idle calibration: zero delta at idle (°F scale, 2026-06-23)
+      - offset: 1.346
+
+  # Computed: humidity delta (supply - return)
+  - platform: template
+    name: "Humidity Delta"
+    id: humidity_delta
+    unit_of_measurement: "%"
+    icon: "mdi:water-percent"
+    accuracy_decimals: 1
+    lambda: |-
+      if (id(supply_hum).has_state() && id(return_hum).has_state()) {
+        return id(supply_hum).state - id(return_hum).state;
+      }
+      return {};
+    update_interval: 30s
+    filters:
+      # idle calibration 2026-06-23: zero delta at idle
+      - offset: 2.57
 
   # Diagnostics
   - platform: wifi_signal
