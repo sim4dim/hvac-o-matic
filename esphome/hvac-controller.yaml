@@ -562,6 +562,17 @@ binary_sensor:
     name: "Status"
 
 # ---------------------------------------------------------------------------
+# BSEC2 hub for return-duct BME680 (IAQ / VOC-eq / CO2-eq)
+# ---------------------------------------------------------------------------
+bme68x_bsec2_i2c:
+  address: 0x77
+  model: BME680
+  operating_age: 28d        # fixed installation
+  sample_rate: LP           # ~3s gas measurement (better IAQ resolution)
+  temperature_offset: 0.37  # compensate BSEC LP self-heating (measured 2026-06-24)
+  state_save_interval: 6h   # persist BSEC calibration state to flash
+
+# ---------------------------------------------------------------------------
 # Environmental sensors
 # ---------------------------------------------------------------------------
 sensor:
@@ -579,26 +590,42 @@ sensor:
       name: "Supply Pressure"
       id: supply_pres
 
-  # Return duct - BME680 at 0x77
-  - platform: bme680
-    address: 0x77
-    update_interval: 30s
+  # Return duct - BME680 at 0x77 via Bosch BSEC2 (IAQ / VOC-eq / CO2-eq)
+  - platform: bme68x_bsec2
     temperature:
       name: "Return Temperature"
       id: return_temp
+      accuracy_decimals: 1
     humidity:
       name: "Return Humidity"
       id: return_hum
+      accuracy_decimals: 1
     pressure:
       name: "Return Pressure"
       id: return_pres
+      accuracy_decimals: 1
     gas_resistance:
       name: "Return VOC"
       id: return_voc
       unit_of_measurement: "kΩ"
+      accuracy_decimals: 0
       filters:
-        - skip_initial: 10
         - multiply: 0.001  # Ohm -> kOhm
+    iaq:
+      name: "Return IAQ"
+      id: return_iaq
+      accuracy_decimals: 0
+    iaq_accuracy:
+      name: "Return IAQ Accuracy"
+      accuracy_decimals: 0
+    co2_equivalent:
+      name: "Return CO2 Equivalent"
+      unit_of_measurement: "ppm"
+      accuracy_decimals: 0
+    breath_voc_equivalent:
+      name: "Return Breath VOC"
+      unit_of_measurement: "ppm"
+      accuracy_decimals: 2
 
   # Computed: pressure delta (supply - return)
   - platform: template
@@ -751,3 +778,6 @@ text_sensor:
     ip_address:
       id: ip_addr
       name: "IP Address"
+  - platform: bme68x_bsec2
+    iaq_accuracy:
+      name: "Return IAQ Status"
