@@ -6,7 +6,7 @@ Controls Keen smart vents via Hubitat integration (Zigbee radios on Hubitat).
 HVAC furnace controlled directly via HTTP to Flask server (bypasses Hubitat).
 First floor servo register controlled via ESPHome native API (number entity).
 
-Version: 2.6.2 — fix: heartbeat fan field includes _circ_enabled() so continuous circulation holds the fan on; status shows CIRCULATING (not IDLE) during continuous circulation
+Version: 2.6.3 — safety: enabling continuous circulation while HVAC is active no longer stomps zone vent positions (defers vent-open until idle); circulation can't override heat/cool
 """
 
 import datetime as dt_mod
@@ -1906,11 +1906,18 @@ def on_circ_change(**kwargs):
         on = _circ_enabled()
         log.info(f"keenect: continuous circulation {'ON' if on else 'OFF'}")
         if on:
-            # Open non-excluded vents to fan position and turn fan on
-            for zn, zone in ZONES.items():
-                if not _zone_circ_excluded(zn):
-                    _set_vent(zn, zone.get("fan_vo", 30))
-            _hvac_push(6)  # fanOn
+            if _st["hvac_on"]:
+                # HVAC is active — do NOT stomp zone vent positions. _hvac_turn_off
+                # already checks _circ_enabled() and keeps the fan on + skips vent
+                # closure, so circulation takes effect automatically once the
+                # heat/cool run ends. (Prevents circulation overriding heat/cool.)
+                log.info("keenect: circulation enabled while HVAC active — deferring vents until idle")
+            else:
+                # Open non-excluded vents to fan position and turn fan on
+                for zn, zone in ZONES.items():
+                    if not _zone_circ_excluded(zn):
+                        _set_vent(zn, zone.get("fan_vo", 30))
+                _hvac_push(6)  # fanOn
         else:
             # Turn fan off and close vents (unless HVAC or recirc is active)
             if not _st["hvac_on"] and not _st["recirc_active"]:
