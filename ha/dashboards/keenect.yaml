@@ -791,3 +791,28 @@ views:
           - entity: sensor.hvac_controller_return_pressure
             name: "Return"
             stroke_width: 2
+
+      - type: entities
+        title: Filter Monitor
+        entities:
+          - entity: sensor.filter_loading
+            name: Filter loading
+          - entity: sensor.filter_dp_circulation
+            name: ΔP (circulation)
+          - entity: input_number.filter_baseline_dp
+            name: Clean baseline ΔP
+          - entity: input_number.filter_replace_threshold_pct
+            name: Replace threshold
+          - entity: input_datetime.filter_last_changed
+            name: Last changed
+          - entity: input_button.filter_reset_baseline
+            name: Reset baseline (after swap)
+      - type: custom:apexcharts-card
+        header:
+          show: true
+          title: "Filter ΔP trend (circulation)"
+        graph_span: 7d
+        series:
+          - entity: sensor.filter_dp_circulation
+            name: ΔP
+            stroke_width: 2

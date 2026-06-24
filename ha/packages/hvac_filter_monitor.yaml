@@ -1,0 +1,120 @@
+# Differential-pressure filter-loading monitor.
+# The supply & return pressure sensors bracket the filter, so supply-return ΔP
+# rises as the filter clogs. We measure ΔP only during the periodic circulation
+# windows (fixed fan + 30% vents = a repeatable reference airflow), smooth it with
+# an EMA, and compare to a clean-filter baseline captured right after a swap.
+# Caveats: ΔP also includes coil/damper restriction; signal is small at 30% vents.
+# All helpers/templates/automations here reload WITHOUT reload_all (which breaks
+# climate_template) — use input_*.reload / template.reload / automation.reload.
+
+input_number:
+  filter_baseline_dp:
+    name: Clean Filter Baseline ΔP
+    min: 0
+    max: 5
+    step: 0.005
+    unit_of_measurement: "hPa"
+    icon: mdi:air-filter
+  filter_replace_threshold_pct:
+    name: Filter Replace Threshold
+    min: 120
+    max: 300
+    step: 5
+    unit_of_measurement: "%"
+    icon: mdi:percent
+
+input_button:
+  filter_reset_baseline:
+    name: Reset Filter Baseline (after fresh filter)
+    icon: mdi:air-filter
+
+input_datetime:
+  filter_last_changed:
+    name: Filter Last Changed
+    has_date: true
+    has_time: false
+
+template:
+  # Smoothed ΔP captured ONLY during circulation; holds last value otherwise.
+  - trigger:
+      - platform: state
+        entity_id: sensor.hvac_controller_pressure_delta
+    sensor:
+      - name: "Filter ΔP (circulation)"
+        unique_id: filter_dp_circulation
+        unit_of_measurement: "hPa"
+        state_class: measurement
+        icon: mdi:air-filter
+        state: >
+          {% set prev = this.state | float(none) %}
+          {% if states('sensor.keenect_status') != 'CIRCULATING' %}
+            {{ prev if prev is not none else 0 }}
+          {% else %}
+            {% set cur = trigger.to_state.state | float(none) %}
+            {% if cur is none %}{{ prev if prev is not none else 0 }}
+            {% elif prev is none or prev < 0.05 %}{{ cur | round(3) }}
+            {% else %}{{ (prev * 0.85 + cur * 0.15) | round(3) }}{% endif %}
+          {% endif %}
+
+  - sensor:
+      - name: "Filter Loading"
+        unique_id: filter_loading_pct
+        unit_of_measurement: "%"
+        icon: mdi:air-filter
+        state: >
+          {% set base = states('input_number.filter_baseline_dp') | float(0) %}
+          {% set cur = states('sensor.filter_dp_circulation') | float(none) %}
+          {% if base <= 0.005 or cur is none %}unknown
+          {% else %}{{ (cur / base * 100) | round(0) }}{% endif %}
+        attributes:
+          baseline_dp: "{{ states('input_number.filter_baseline_dp') }} hPa"
+          current_dp: "{{ states('sensor.filter_dp_circulation') }} hPa"
+          last_changed: "{{ states('input_datetime.filter_last_changed') }}"
+          note: "ΔP measured during circulation (fixed airflow); reset baseline after each filter change"
+
+automation:
+  - id: hvac_filter_reset_baseline
+    alias: "Filter: capture clean baseline on button press"
+    mode: single
+    trigger:
+      - platform: state
+        entity_id: input_button.filter_reset_baseline
+    action:
+      - service: input_number.set_value
+        target:
+          entity_id: input_number.filter_baseline_dp
+        data:
+          value: "{{ states('sensor.filter_dp_circulation') | float(0) | round(3) }}"
+      - service: input_datetime.set_datetime
+        target:
+          entity_id: input_datetime.filter_last_changed
+        data:
+          date: "{{ now().strftime('%Y-%m-%d') }}"
+      - service: persistent_notification.create
+        data:
+          notification_id: filter_baseline
+          title: "Filter baseline reset"
+          message: "Clean-filter baseline ΔP set to {{ states('sensor.filter_dp_circulation') }} hPa."
+
+  - id: hvac_filter_replace_alert
+    alias: "Filter: replacement alert"
+    mode: single
+    trigger:
+      - platform: numeric_state
+        entity_id: sensor.filter_loading
+        above: input_number.filter_replace_threshold_pct
+        for:
+          minutes: 30
+    condition:
+      - condition: template
+        value_template: "{{ states('input_number.filter_baseline_dp') | float(0) > 0.005 }}"
+    action:
+      - service: persistent_notification.create
+        data:
+          notification_id: filter_replace
+          title: "HVAC filter likely needs replacement"
+          message: >
+            Filter loading is {{ states('sensor.filter_loading') }}% of clean baseline
+            (ΔP {{ states('sensor.filter_dp_circulation') }} hPa vs
+            {{ states('input_number.filter_baseline_dp') }} hPa baseline). Replace the
+            filter, then press "Reset Filter Baseline".
