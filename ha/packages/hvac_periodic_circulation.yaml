@@ -1,0 +1,37 @@
+# Periodic circulation: run continuous circulation 10 min at the top of each hour.
+# Keeps house air mixed/filtered and — importantly — feeds the BSEC air-quality
+# sensor a regular stream of varying air so its IAQ calibration can advance
+# (BSEC needs changing air, not just runtime, to leave "Uncertain").
+# Toggles the existing input_boolean.enable_circulation (keenect holds the fan on
+# while it's on). Tune the on/off minutes to change the duty cycle.
+automation:
+  - id: hvac_periodic_circulation
+    alias: "HVAC periodic circulation (10 min/hour)"
+    mode: single
+    trigger:
+      - platform: time_pattern
+        minutes: "0"
+        id: start
+      - platform: time_pattern
+        minutes: "10"
+        id: stop
+    action:
+      - choose:
+          - conditions:
+              - condition: trigger
+                id: start
+              # Never start circulation while heat/cool is active (it would briefly
+              # stomp zone vents). keenect_status reads HEATING/COOLING when hvac_on.
+              - condition: template
+                value_template: "{{ states('sensor.keenect_status') not in ['HEATING', 'COOLING'] }}"
+            sequence:
+              - service: input_boolean.turn_on
+                target:
+                  entity_id: input_boolean.enable_circulation
+          - conditions:
+              - condition: trigger
+                id: stop
+            sequence:
+              - service: input_boolean.turn_off
+                target:
+                  entity_id: input_boolean.enable_circulation
