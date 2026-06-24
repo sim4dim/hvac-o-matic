@@ -654,6 +654,20 @@ views:
     path: controller
     icon: mdi:gauge
     cards:
+      - type: entities
+        title: Return Air Quality
+        entities:
+          - entity: sensor.return_air_quality
+            name: Air quality
+          - entity: sensor.hvac_controller_return_iaq
+            name: IAQ index
+          - entity: sensor.hvac_controller_return_iaq_status
+            name: BSEC confidence
+          - entity: sensor.hvac_controller_return_co2_equivalent
+            name: CO₂ equivalent
+          - entity: sensor.hvac_controller_return_breath_voc
+            name: Breath VOC
+
       - type: custom:apexcharts-card
         header:
           show: true
@@ -697,12 +711,27 @@ views:
       - type: custom:apexcharts-card
         header:
           show: true
-          title: "Return IAQ (lower = cleaner)"
+          title: "Return IAQ + accuracy (0–3)"
         graph_span: 24h
+        yaxis:
+          - id: iaq
+            min: 0
+          - id: acc
+            opposite: true
+            min: 0
+            max: 3
+            decimals: 0
         series:
           - entity: sensor.hvac_controller_return_iaq
             name: IAQ
+            yaxis_id: iaq
             stroke_width: 2
+          - entity: sensor.hvac_controller_return_iaq_accuracy
+            name: Accuracy
+            yaxis_id: acc
+            type: area
+            opacity: 0.15
+            stroke_width: 1
 
       - type: custom:apexcharts-card
         header:

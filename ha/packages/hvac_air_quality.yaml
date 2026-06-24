@@ -1,0 +1,38 @@
+# Human-readable return-air quality, wrapping the BSEC IAQ with its confidence.
+# State = Bosch IAQ category (plain English); the raw IAQ number and the BSEC
+# accuracy/status ride along as attributes so the rating never travels without
+# its confidence. Bosch BME680 IAQ scale:
+#   0-50 Excellent | 51-100 Good | 101-150 Lightly polluted |
+#   151-200 Moderately polluted | 201-250 Heavily polluted |
+#   251-350 Severely polluted | 351-500 Extremely polluted
+# BSEC accuracy: 0 Stabilizing (ignore) | 1 Uncertain | 2 Calibrating | 3 Calibrated
+template:
+  - sensor:
+      - name: "Return Air Quality"
+        unique_id: hvac_return_air_quality
+        icon: >-
+          {% set i = states('sensor.hvac_controller_return_iaq') | float(-1) %}
+          {% if i < 0 %}mdi:help-circle-outline
+          {% elif i <= 100 %}mdi:emoticon-happy-outline
+          {% elif i <= 200 %}mdi:emoticon-neutral-outline
+          {% else %}mdi:emoticon-sad-outline
+          {% endif %}
+        state: >-
+          {% set i = states('sensor.hvac_controller_return_iaq') | float(none) %}
+          {% if i is none %}Unknown
+          {% elif i <= 50 %}Excellent
+          {% elif i <= 100 %}Good
+          {% elif i <= 150 %}Lightly polluted
+          {% elif i <= 200 %}Moderately polluted
+          {% elif i <= 250 %}Heavily polluted
+          {% elif i <= 350 %}Severely polluted
+          {% else %}Extremely polluted
+          {% endif %}
+        attributes:
+          iaq: "{{ states('sensor.hvac_controller_return_iaq') }}"
+          accuracy: "{{ states('sensor.hvac_controller_return_iaq_accuracy') }}"
+          status: "{{ states('sensor.hvac_controller_return_iaq_status') }}"
+          reliable: "{{ states('sensor.hvac_controller_return_iaq_accuracy') | int(0) >= 2 }}"
+          co2_equivalent_ppm: "{{ states('sensor.hvac_controller_return_co2_equivalent') }}"
+          breath_voc_ppm: "{{ states('sensor.hvac_controller_return_breath_voc') }}"
+          scale: "0-50 Excellent | 51-100 Good | 101-150 Lightly | 151-200 Moderately | 201-250 Heavily | 251-350 Severely | 351+ Extremely polluted"
