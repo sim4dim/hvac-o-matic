@@ -6,7 +6,7 @@ Controls Keen smart vents via Hubitat integration (Zigbee radios on Hubitat).
 HVAC furnace controlled directly via HTTP to Flask server (bypasses Hubitat).
 First floor servo register controlled via ESPHome native API (number entity).
 
-Version: 2.6.0 — Flask→ESPHome cutover: _hvac_push() now drives ESPHome switches directly
+Version: 2.6.2 — fix: heartbeat fan field includes _circ_enabled() so continuous circulation holds the fan on; status shows CIRCULATING (not IDLE) during continuous circulation
 """
 
 import datetime as dt_mod
@@ -1455,6 +1455,8 @@ def _update_status():
     # Main status
     if _st["recirc_active"]:
         status = "RECIRC"
+    elif _circ_enabled() and not _st["hvac_on"]:
+        status = "CIRCULATING"
     else:
         status = _st["main_state"]
     ot = _outdoor_temp()
@@ -1464,6 +1466,7 @@ def _update_status():
             "icon": "mdi:hvac",
             "hvac_on": _st["hvac_on"],
             "recirc_active": _st["recirc_active"],
+            "circulating": _circ_enabled(),
             "outdoor_temp": ot,
             "cool_lockout": ot is not None and ot < _cool_lockout_temp(),
             "warmup_sensor_available": _st.get("_warmup_sensors_ok", True),
@@ -2523,7 +2526,7 @@ def keenect_heartbeat():
     payload = json_mod.dumps({
         "heat": _st.get("hvac_on", False) and mode == "HEAT",
         "cool": _st.get("hvac_on", False) and mode == "COOL",
-        "fan": _st.get("hvac_on", False) or _st.get("recirc_active", False),
+        "fan": _st.get("hvac_on", False) or _st.get("recirc_active", False) or _circ_enabled(),
     }, separators=(',', ':'))
     try:
         mqtt.publish(topic="keenect/heartbeat", payload=payload, qos=1, retain=True)
