@@ -697,6 +697,36 @@ views:
       - type: custom:apexcharts-card
         header:
           show: true
+          title: "Return IAQ (lower = cleaner)"
+        graph_span: 24h
+        series:
+          - entity: sensor.hvac_controller_return_iaq
+            name: IAQ
+            stroke_width: 2
+
+      - type: custom:apexcharts-card
+        header:
+          show: true
+          title: "Return Breath VOC (ppm)"
+        graph_span: 24h
+        series:
+          - entity: sensor.hvac_controller_return_breath_voc
+            name: "Breath VOC"
+            stroke_width: 2
+
+      - type: custom:apexcharts-card
+        header:
+          show: true
+          title: "Return CO₂ equivalent (ppm)"
+        graph_span: 24h
+        series:
+          - entity: sensor.hvac_controller_return_co2_equivalent
+            name: "CO₂ eq"
+            stroke_width: 2
+
+      - type: custom:apexcharts-card
+        header:
+          show: true
           title: "Supply / Return Temp"
         graph_span: 24h
         series:
