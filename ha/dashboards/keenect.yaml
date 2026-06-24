@@ -649,3 +649,86 @@ views:
 
           To add a passive zone (temperature monitoring only, no vents), enable
           `input_boolean.keenect_passive_N_enabled` the same way.
+
+  - title: Controller
+    path: controller
+    icon: mdi:gauge
+    cards:
+      - type: custom:apexcharts-card
+        header:
+          show: true
+          title: "Pressure Δ (supply − return)"
+        graph_span: 24h
+        series:
+          - entity: sensor.hvac_controller_pressure_delta
+            name: "Pressure Δ"
+            stroke_width: 2
+
+      - type: custom:apexcharts-card
+        header:
+          show: true
+          title: "Temperature Δ (supply − return)"
+        graph_span: 24h
+        series:
+          - entity: sensor.hvac_controller_temperature_delta
+            name: "Temperature Δ"
+            stroke_width: 2
+
+      - type: custom:apexcharts-card
+        header:
+          show: true
+          title: "Humidity Δ (supply − return)"
+        graph_span: 24h
+        series:
+          - entity: sensor.hvac_controller_humidity_delta
+            name: "Humidity Δ"
+            stroke_width: 2
+
+      - type: custom:apexcharts-card
+        header:
+          show: true
+          title: "Return-air VOC"
+        graph_span: 24h
+        series:
+          - entity: sensor.hvac_controller_return_voc
+            name: "VOC"
+            stroke_width: 2
+
+      - type: custom:apexcharts-card
+        header:
+          show: true
+          title: "Supply / Return Temp"
+        graph_span: 24h
+        series:
+          - entity: sensor.hvac_controller_supply_temperature
+            name: "Supply"
+            stroke_width: 2
+          - entity: sensor.hvac_controller_return_temperature
+            name: "Return"
+            stroke_width: 2
+
+      - type: custom:apexcharts-card
+        header:
+          show: true
+          title: "Supply / Return Humidity"
+        graph_span: 24h
+        series:
+          - entity: sensor.hvac_controller_supply_humidity
+            name: "Supply"
+            stroke_width: 2
+          - entity: sensor.hvac_controller_return_humidity
+            name: "Return"
+            stroke_width: 2
+
+      - type: custom:apexcharts-card
+        header:
+          show: true
+          title: "Supply / Return Pressure"
+        graph_span: 24h
+        series:
+          - entity: sensor.hvac_controller_supply_pressure
+            name: "Supply"
+            stroke_width: 2
+          - entity: sensor.hvac_controller_return_pressure
+            name: "Return"
+            stroke_width: 2
