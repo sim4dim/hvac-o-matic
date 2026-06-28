@@ -433,6 +433,8 @@ _st = {
     "push_fail_count": 0,
     # Safety: per-zone consecutive sensor failure counts
     "sensor_fail_count": {},
+    # Safety: True when any vent was left at fan_vo due to sensor-failure neutral
+    "sensor_fail_parked": False,
     # Safety: short-cycle and min-run protection timestamps
     "last_hvac_on_time": 0,
     "last_hvac_off_time": 0,
@@ -1300,6 +1302,7 @@ def _eval_master():
                 fan_vo = zone.get("fan_vo", 30)
                 log.warning(f"keenect: sensor dead - {zn} None {fc}x, moving vent to neutral ({fan_vo})")
                 _set_vent(zn, fan_vo)
+                _st["sensor_fail_parked"] = True
 
     # Emergency: ALL zones returning None while HVAC is on
     if len(none_zones) == len(ZONES) and _st.get("hvac_on"):
@@ -1330,6 +1333,19 @@ def _eval_master():
     demanding = sum([1 for r in results.values() if r["op"] in ("HEATING", "COOLING")])
     mode = _hvac_mode()
 
+    # Stale-vent sweep: during active HVAC with at least one demanding zone, close any
+    # idle zone whose vent is still open.  _apply_zone_vents only fires the idle-close
+    # path on transition (old != "IDLE"), so zones that were already IDLE when HVAC
+    # activated are never closed there.  This sweep is idempotent — _close_zone is a
+    # no-op when the vent is already 0.
+    if _st["hvac_on"] and demanding > 0:
+        stale = [z for z, zst in _st["zone_states"].items()
+                 if zst in ("IDLE", "OFF", "") and _st["vent_levels"].get(z, 0) > 0]
+        if stale:
+            log.info(f"keenect: stale-vent sweep - closing idle zones with open vents: {stale}")
+            for z in stale:
+                _close_zone(z)
+
     if demanding > 0:
         if mode == "OFF":
             log.info(f"keenect: {demanding} zones demanding but mode OFF")
@@ -1352,6 +1368,17 @@ def _eval_master():
                 log.info(f"keenect: idle reconciliation - closing vents left open: {open_vents}")
                 _close_all_vents()
                 _st["vents_closed_after_off"] = True
+        elif (not _st["hvac_on"] and not _st["recirc_active"]
+              and _st.get("sensor_fail_parked") and not none_zones):
+            # Sensor-fail recovery: vents were parked at fan_vo due to sensor failure.
+            # Sensors are now healthy (none_zones empty). Close vents and clear the flag,
+            # bypassing the _circ_enabled() gate — circ will reopen them if needed, but
+            # we must not leave parked vents stranded just because circ is enabled.
+            open_vents = [k for k, v in _st["vent_levels"].items() if v > 0]
+            log.info(f"keenect: sensor-fail recovery - sensors healthy, closing parked vents: {open_vents}")
+            _close_all_vents()
+            _st["sensor_fail_parked"] = False
+            _st["vents_closed_after_off"] = True
 
     # Check delayed vent closure timer
     _check_vent_closure_timer(now)
@@ -1633,16 +1660,28 @@ def on_startup():
         # zones in the deadband (at setpoint) would all evaluate as IDLE and close vents
         # even while the furnace is still running.
         was_on = _st["hvac_on"]
+        was_main_state = _st["main_state"]  # capture before reset
         _st["hvac_on"] = False
         _st["main_state"] = "IDLE"
         _st["warmup_start"] = None
         _st["vent_levels"] = {}  # force vent re-sends
 
-        # P6: Hardware safety sync FIRST — ensure furnace is off before anything else.
-        # This prevents the furnace from running uncontrolled during startup logic.
-        log.info("keenect: startup - hardware safety sync: ensuring furnace off")
-        _hvac_push(3)  # heatOff
-        _hvac_push(5)  # coolOff
+        # P6: Hardware safety sync — ensure the furnace is off before startup logic runs.
+        # Skip the off-command for whichever mode was already active.  Sending heatOff
+        # when the system was heating (or coolOff when it was cooling) fires on_turn_off
+        # on the ESP32 with the relay physically ON, which stamps *_last_off = millis().
+        # The short-cycle guard then blocks the next eval-driven turn-on for 120/300 s,
+        # and keenect's 60 s heartbeat re-blocks it every retry — permanent livelock.
+        # eval_master() re-arms the correct relay at the end of startup, so it is safe
+        # to leave the active relay running for the few seconds startup takes.
+        log.info(
+            "keenect: startup - hardware safety sync "
+            f"(was_on={was_on} was_main_state={was_main_state})"
+        )
+        if was_main_state != "HEATING":
+            _hvac_push(3)  # heatOff — safe; heat was not running
+        if was_main_state != "COOLING":
+            _hvac_push(5)  # coolOff — safe; cool was not running
         if not _circ_enabled():
             _hvac_push(7)  # fanOff
         safety_synced = True
