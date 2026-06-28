@@ -1339,8 +1339,12 @@ def _eval_master():
     # activated are never closed there.  This sweep is idempotent — _close_zone is a
     # no-op when the vent is already 0.
     if _st["hvac_on"] and demanding > 0:
+        # vent_levels keys are "zone:vent_id", so match by zone prefix (a bare
+        # zone-name .get() always missed — the sweep was a silent no-op).
         stale = [z for z, zst in _st["zone_states"].items()
-                 if zst in ("IDLE", "OFF", "") and _st["vent_levels"].get(z, 0) > 0]
+                 if zst in ("IDLE", "OFF", "")
+                 and len([1 for k, v in _st["vent_levels"].items()
+                          if k.startswith(z + ":") and v > 0]) > 0]
         if stale:
             log.info(f"keenect: stale-vent sweep - closing idle zones with open vents: {stale}")
             for z in stale:
