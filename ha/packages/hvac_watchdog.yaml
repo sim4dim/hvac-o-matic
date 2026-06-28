@@ -1,0 +1,37 @@
+template:
+  - binary_sensor:
+      - name: "HVAC Control Divergence"
+        unique_id: hvac_control_divergence
+        device_class: problem
+        icon: mdi:alert-circle
+        state: >
+          {{ (states('sensor.keenect_status') == 'COOLING' and states('switch.hvac_controller_cool') == 'off')
+             or (states('sensor.keenect_status') == 'HEATING' and states('switch.hvac_controller_heat') == 'off') }}
+
+automation:
+  - alias: "HVAC Control Divergence Alert"
+    id: hvac_control_divergence_alert
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.hvac_control_divergence
+        to: "on"
+        for: "00:10:00"
+    condition: []
+    action:
+      - service: persistent_notification.create
+        data:
+          title: "HVAC Control Divergence"
+          message: >
+            HVAC divergence: keenect reports {{ states('sensor.keenect_status') }} but relay is OFF.
+            Heat relay: {{ states('switch.hvac_controller_heat') }},
+            Cool relay: {{ states('switch.hvac_controller_cool') }}.
+            Sustained >10 min — check ESPHome/keenect.
+          notification_id: hvac_control_divergence
+      - service: notify.itelephone
+        data:
+          title: "HVAC Control Divergence"
+          message: >
+            HVAC divergence: keenect reports {{ states('sensor.keenect_status') }} but relay is OFF.
+            Heat relay: {{ states('switch.hvac_controller_heat') }},
+            Cool relay: {{ states('switch.hvac_controller_cool') }}.
+            Sustained >10 min — check ESPHome/keenect.

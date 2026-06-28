@@ -369,8 +369,13 @@ switch:
       - switch.turn_on: uv_sw
     on_turn_off:
       - lambda: |-
+          // Only stamp last_off on a genuine run→off transition.
+          // If heat_on_since is 0 the relay was never actually running this
+          // cycle (boot ALWAYS_OFF or a short-cycle-blocked attempt called
+          // turn_off) — stamping in those cases re-arms the guard window
+          // against a run that never happened, causing livelock.
+          if (id(heat_on_since) != 0) id(heat_last_off) = millis();
           id(heat_on_since) = 0;
-          id(heat_last_off) = millis();
           if (!id(cool_sw).state) {
             id(fan_sw).turn_off();
             id(uv_sw).turn_off();
@@ -398,8 +403,13 @@ switch:
       - switch.turn_on: uv_sw
     on_turn_off:
       - lambda: |-
+          // Only stamp last_off on a genuine run→off transition.
+          // If cool_on_since is 0 the relay was never actually running this
+          // cycle (boot ALWAYS_OFF or a short-cycle-blocked attempt called
+          // turn_off) — stamping in those cases re-arms the guard window
+          // against a run that never happened, causing livelock.
+          if (id(cool_on_since) != 0) id(cool_last_off) = millis();
           id(cool_on_since) = 0;
-          id(cool_last_off) = millis();
           if (!id(heat_sw).state) {
             id(fan_sw).turn_off();
             id(uv_sw).turn_off();
