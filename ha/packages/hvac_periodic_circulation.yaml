@@ -4,7 +4,55 @@
 # (BSEC needs changing air, not just runtime, to leave "Uncertain").
 # Toggles the existing input_boolean.enable_circulation (keenect holds the fan on
 # while it's on). Tune the on/off minutes to change the duty cycle.
+#
+# circulation_mode options:
+#   Off        — circulation disabled; periodic automation does nothing
+#   Periodic   — 10 min/hour at :00 (original behavior)
+#   Continuous — fan held on permanently; periodic automation does not interfere
+
+input_select:
+  circulation_mode:
+    name: "Circulation Mode"
+    options:
+      - "Off"
+      - "Periodic"
+      - "Continuous"
+    icon: mdi:fan
+
 automation:
+  - id: hvac_circulation_mode_controller
+    alias: "Circulation mode controller"
+    mode: single
+    trigger:
+      - platform: state
+        entity_id: input_select.circulation_mode
+    action:
+      - choose:
+          - conditions:
+              - condition: state
+                entity_id: input_select.circulation_mode
+                state: "Continuous"
+            sequence:
+              - service: input_boolean.turn_on
+                target:
+                  entity_id: input_boolean.enable_circulation
+          - conditions:
+              - condition: state
+                entity_id: input_select.circulation_mode
+                state: "Off"
+            sequence:
+              - service: input_boolean.turn_off
+                target:
+                  entity_id: input_boolean.enable_circulation
+          - conditions:
+              - condition: state
+                entity_id: input_select.circulation_mode
+                state: "Periodic"
+            sequence:
+              - service: input_boolean.turn_off
+                target:
+                  entity_id: input_boolean.enable_circulation
+
   - id: hvac_periodic_circulation
     alias: "HVAC periodic circulation (10 min/hour)"
     mode: single
@@ -20,6 +68,9 @@ automation:
           - conditions:
               - condition: trigger
                 id: start
+              # Only run in Periodic mode
+              - condition: template
+                value_template: "{{ states('input_select.circulation_mode') == 'Periodic' }}"
               # Never start circulation while heat/cool is active (it would briefly
               # stomp zone vents). keenect_status reads HEATING/COOLING when hvac_on.
               - condition: template
@@ -31,6 +82,9 @@ automation:
           - conditions:
               - condition: trigger
                 id: stop
+              # Only run in Periodic mode
+              - condition: template
+                value_template: "{{ states('input_select.circulation_mode') == 'Periodic' }}"
             sequence:
               - service: input_boolean.turn_off
                 target:

@@ -622,8 +622,10 @@ views:
             name: Smart Recirculation
           - entity: input_number.recirculation_delay
             name: Recirculation Delay
+          - entity: input_select.circulation_mode
+            name: Circulation Mode
           - entity: input_boolean.enable_circulation
-            name: Continuous Circulation
+            name: Circulation Active
       - type: entities
         title: Energy Tracking
         show_header_toggle: false
