@@ -440,6 +440,11 @@ _st = {
     "last_hvac_off_time": 0,
     # Warmup sensor health flag
     "_warmup_sensors_ok": True,
+    # Outdoor temp freshness tracking
+    "outdoor_temp_last_value": None,   # last seen outdoor temp value
+    "outdoor_temp_last_changed": 0.0,  # timestamp when value last changed
+    # Safety: consecutive all-None eval counter (debounce emergency shutoff)
+    "all_none_count": 0,
 }
 
 
@@ -770,7 +775,13 @@ def _hvac_esphome_mirror(button):
 
 
 def _outdoor_temp():
-    return _float(OUTDOOR_TEMP_ENTITY)
+    val = _float(OUTDOOR_TEMP_ENTITY)
+    if val is not None:
+        prev = _st.get("outdoor_temp_last_value")
+        if prev is None or abs(val - prev) >= 0.1:
+            _st["outdoor_temp_last_value"] = val
+            _st["outdoor_temp_last_changed"] = time_mod.time()
+    return val
 
 
 def _hvac_turn_on():
@@ -793,9 +804,25 @@ def _hvac_turn_on():
     if mode == "COOL":
         ot = _outdoor_temp()
         lockout = _cool_lockout_temp()
-        if ot is not None and ot < lockout:
-            log.warning(f"keenect: COOL blocked - outdoor temp {ot}°F < {lockout}°F")
-            return
+        if ot is None:
+            pass  # unavailable already fails open — allow cooling
+        elif ot < -20 or ot > 130:
+            log.warning(
+                f"keenect: cool-lockout SKIPPED - outdoor temp {ot}°F is implausible "
+                f"(< -20 or > 130), treating as unknown"
+            )
+        else:
+            # Check staleness: if temp hasn't changed in > 45 min, treat as stale/frozen
+            last_changed = _st.get("outdoor_temp_last_changed", 0.0)
+            age = time_mod.time() - last_changed if last_changed else None
+            if age is not None and age > 2700:  # 45 * 60 = 2700s
+                log.warning(
+                    f"keenect: cool-lockout SKIPPED - outdoor temp {ot}°F unchanged for "
+                    f"{age/60:.0f}min (stale/frozen sensor), treating as unknown"
+                )
+            elif ot < lockout:
+                log.warning(f"keenect: COOL blocked - outdoor temp {ot}°F < {lockout}°F")
+                return
     # If already on in a different mode, turn off first
     if _st["hvac_on"] and (
         (mode == "HEAT" and _st["main_state"] == "COOLING") or
@@ -973,34 +1000,50 @@ def _close_all_vents():
 
 
 def _verify_vents():
-    """Check Keen light vents actually reached their target; clear cache to retry if not."""
+    """Check vents actually reached their target; clear cache to retry if not."""
     for zn, zone in ZONES.items():
-        if zone.get("vent_type") != "light":
-            continue
+        vtype = zone.get("vent_type", "light")
         for vent_id in zone["vents"]:
             key = f"{zn}:{vent_id}"
             target = _st["vent_levels"].get(key)
             if target is None:
                 continue
             try:
-                s = state.get(vent_id)
-                if target == 0 and s == "off":
-                    continue  # correct
-                if target > 0 and s == "on":
-                    bri = state.get(f"{vent_id}.brightness")
-                    if bri is None:
-                        attrs = state.getattr(vent_id)
-                        bri = attrs.get("brightness", 0) if attrs else 0
-                    bri = int(bri)
-                    actual_pct = round(bri * 100 / 255) if bri else 0
-                    if abs(actual_pct - target) <= 10:
-                        continue  # close enough
-                # Mismatch - clear cache so next eval retries
-                log.warning(f"keenect: vent {vent_id} target={target} actual={s}, clearing cache to retry")
-                del _st["vent_levels"][key]
-                if target == 0 and s != "off":
-                    log.warning(f"keenect: vent {vent_id} reconnected open during IDLE, forcing close")
-                    _set_vent(zn, 0)
+                if vtype == "light":
+                    s = state.get(vent_id)
+                    if target == 0 and s == "off":
+                        continue  # correct
+                    if target > 0 and s == "on":
+                        bri = state.get(f"{vent_id}.brightness")
+                        if bri is None:
+                            attrs = state.getattr(vent_id)
+                            bri = attrs.get("brightness", 0) if attrs else 0
+                        bri = int(bri)
+                        actual_pct = round(bri * 100 / 255) if bri else 0
+                        if abs(actual_pct - target) <= 10:
+                            continue  # close enough
+                    # Mismatch - clear cache so next eval retries
+                    log.warning(f"keenect: vent {vent_id} target={target} actual={s}, clearing cache to retry")
+                    del _st["vent_levels"][key]
+                    if target == 0 and s != "off":
+                        log.warning(f"keenect: vent {vent_id} reconnected open during IDLE, forcing close")
+                        _set_vent(zn, 0)
+                elif vtype == "number":
+                    # Servo (ESPHome number entity) — re-assert if diverged (catches ESP reboot reset)
+                    s = state.get(vent_id)
+                    if s in ("unavailable", "unknown", None):
+                        continue  # don't crash on unavailable servo
+                    try:
+                        actual = float(s)
+                    except (ValueError, TypeError):
+                        continue
+                    if abs(actual - target) > 2:  # tolerance: 2 degrees
+                        log.warning(
+                            f"keenect: servo {vent_id} target={target} actual={actual:.1f} "
+                            f"(diverged >2°, clearing cache to re-send)"
+                        )
+                        del _st["vent_levels"][key]
+                        _set_vent(zn, target)
             except Exception as e:
                 log.debug(f"keenect: verify vent {vent_id}: {e}")
 
@@ -1268,6 +1311,16 @@ def _eval_master():
         _update_status()
         return
 
+    if state.get("switch.hvac_controller_bypass") == "on":
+        if _st.get("hvac_on"):
+            log.warning("keenect: ESP32 bypass active — ceding control, clearing COOLING/HEATING state")
+            _st["hvac_on"] = False
+            _st["main_state"] = "IDLE"
+            _st["warmup_start"] = None
+        _update_status()
+        _save_if_changed()
+        return
+
     now = time_mod.time()
     if now < _st["debounce_until"]:
         return
@@ -1306,26 +1359,43 @@ def _eval_master():
 
     # Emergency: ALL zones returning None while HVAC is on
     if len(none_zones) == len(ZONES) and _st.get("hvac_on"):
-        log.error("keenect: EMERGENCY - ALL zone sensors returning None while HVAC on, forcing off")
-        # Direct push commands — bypass normal _hvac_turn_off checks
-        _hvac_push(3)   # heatOff
-        _hvac_push(5)   # coolOff
-        _hvac_push(7)   # fanOff
-        _st["main_state"] = "IDLE"
-        _st["hvac_on"] = False
-        _st["warmup_start"] = None
-        _st["last_hvac_off_time"] = time_mod.time()
-        try:
-            persistent_notification.create(
-                title="Keenect: EMERGENCY SHUTOFF",
-                message="ALL zone temperature sensors returned None simultaneously. "
-                        "HVAC has been force-shut-off. Check sensor connectivity immediately.",
-                notification_id="keenect_emergency_shutoff",
+        _st["all_none_count"] = _st.get("all_none_count", 0) + 1
+        if _st["all_none_count"] < 3:
+            log.warning(
+                f"keenect: all-zone sensor failure #{_st['all_none_count']}/3 "
+                f"(debouncing - need 3 consecutive before emergency shutoff)"
             )
-        except Exception:
-            pass
-        _save_if_changed()
-        return
+        else:
+            log.error(
+                f"keenect: EMERGENCY - ALL zone sensors None for {_st['all_none_count']} "
+                f"consecutive evals while HVAC on, forcing off"
+            )
+            # Direct push commands — bypass normal _hvac_turn_off checks
+            _hvac_push(3)   # heatOff
+            _hvac_push(5)   # coolOff
+            _hvac_push(7)   # fanOff
+            _st["main_state"] = "IDLE"
+            _st["hvac_on"] = False
+            _st["warmup_start"] = None
+            # NOTE: intentionally NOT stamping last_hvac_off_time here so the
+            # short-cycle guard does NOT arm on a sensor-failure-driven shutoff.
+            # Cooling can resume immediately when sensors return.
+            try:
+                persistent_notification.create(
+                    title="Keenect: EMERGENCY SHUTOFF",
+                    message="ALL zone temperature sensors returned None for 3+ consecutive "
+                            "evaluations. HVAC has been force-shut-off. Check sensor "
+                            "connectivity immediately.",
+                    notification_id="keenect_emergency_shutoff",
+                )
+            except Exception:
+                pass
+            _save_if_changed()
+            return
+    else:
+        # At least one zone healthy — reset the debounce counter
+        if _st.get("all_none_count", 0) > 0:
+            _st["all_none_count"] = 0
 
     # Pass 2: apply vent actions with complete picture (order-independent)
     _apply_zone_vents(results)
@@ -1383,6 +1453,15 @@ def _eval_master():
             _close_all_vents()
             _st["sensor_fail_parked"] = False
             _st["vents_closed_after_off"] = True
+        elif (not _st["hvac_on"] and not _st["recirc_active"] and _circ_enabled()):
+            # Circ reconciliation: ensure non-excluded zones are at fan_vo, excluded at 0,
+            # while circulation is active and the system is idle. Self-heals the case where
+            # circ was enabled during an HVAC run (deferred) and HVAC then ended.
+            for zn, zone in ZONES.items():
+                if _zone_circ_excluded(zn):
+                    _set_vent(zn, 0)
+                else:
+                    _set_vent(zn, zone.get("fan_vo", 30))
 
     # Check delayed vent closure timer
     _check_vent_closure_timer(now)
@@ -2572,10 +2651,9 @@ def check_anomalies():
 def keenect_heartbeat():
     """Publish MQTT heartbeat with HVAC state for ESPHome sync on boot."""
     import subprocess
-    mode = _hvac_mode()
     payload = json_mod.dumps({
-        "heat": _st.get("hvac_on", False) and mode == "HEAT",
-        "cool": _st.get("hvac_on", False) and mode == "COOL",
+        "heat": _st.get("main_state") == "HEATING",
+        "cool": _st.get("main_state") == "COOLING",
         "fan": _st.get("hvac_on", False) or _st.get("recirc_active", False) or _circ_enabled(),
     }, separators=(',', ':'))
     try:
@@ -2588,3 +2666,17 @@ def keenect_heartbeat():
                           timeout=5)
         except Exception as e:
             log.warning(f"keenect: heartbeat publish failed: {e}")
+
+
+@state_trigger("switch.hvac_controller_bypass")
+def on_bypass_change(**kwargs):
+    """React immediately when ESP32 bypass switch is toggled on or off."""
+    try:
+        bypass_on = state.get("switch.hvac_controller_bypass") == "on"
+        log.info(f"keenect: ESP32 bypass {'engaged' if bypass_on else 'cleared'}")
+        # NOTE: after a brief bypass ends, last_hvac_off_time is unchanged so the
+        # short-cycle cool guard (300s) may delay compressor restart. This is intentional
+        # — bypassing and quickly resuming still counts as a shutoff for cycle protection.
+        _eval_master()
+    except Exception as e:
+        log.error(f"keenect: on_bypass_change crashed: {e}")
