@@ -5,6 +5,10 @@ esphome:
     board_build.flash_mode: dio
     board_build.f_flash: 80000000L
     board_build.flash_size: 16MB
+  on_boot:
+    priority: -100
+    then:
+      - lambda: "id(last_heartbeat) = millis();"
 
 # ===========================================================================
 # WIRING DIAGRAM
@@ -132,6 +136,9 @@ api:
     - globals.set:
         id: watchdog_tripped
         value: "false"
+    - globals.set:
+        id: last_heartbeat
+        value: !lambda "return millis();"
     # HA connected - exit bypass (unless physical toggle overrides)
     - lambda: |-
         if (!id(toggle_bypass)) {
@@ -186,6 +193,26 @@ globals:
     type: uint32_t
     restore_value: false
     initial_value: "0"
+  - id: heat_cooldown_until
+    type: uint32_t
+    restore_value: false
+    initial_value: "0"
+  - id: cool_cooldown_until
+    type: uint32_t
+    restore_value: false
+    initial_value: "0"
+  - id: cool_freeze_low_since
+    type: uint32_t
+    restore_value: false
+    initial_value: "0"
+  - id: cool_freeze_lockout
+    type: bool
+    restore_value: false
+    initial_value: "false"
+  - id: bypass_from_heartbeat
+    type: bool
+    restore_value: false
+    initial_value: "false"
   - id: last_heartbeat
     type: uint32_t
     restore_value: false
@@ -208,6 +235,15 @@ mqtt:
             bool want_fan  = x["fan"]  | false;
             // Only apply if in ESP32 control mode (not bypass/watchdog)
             if (id(watchdog_tripped)) return;
+            // B2.4: Auto-exit bypass when keenect returns, but ONLY if bypass was triggered by
+            // heartbeat loss (not hardware fault or physical toggle). bypass_sw.turn_off() has
+            // 200ms delays for changeover relay sequencing (async), so bypass_sw.state remains
+            // true momentarily here. Relay sync will complete on the next 60s heartbeat.
+            if (id(bypass_from_heartbeat) && id(bypass_sw).state) {
+              ESP_LOGI("safety", "Keenect heartbeat restored - clearing heartbeat-induced bypass");
+              id(bypass_from_heartbeat) = false;
+              id(bypass_sw).turn_off();
+            }
             if (id(bypass_sw).state) return;
             auto set_sw = [](switch_::Switch *sw, bool want) {
               if (sw->state != want) {
@@ -257,24 +293,58 @@ interval:
       - lambda: |-
           uint32_t now = millis();
 
-          // --- Max-run timer: heat (2 hours) ---
-          if (id(heat_on_since) > 0 && now - id(heat_on_since) > 7200000) {
-            ESP_LOGE("safety", "Heat max-run exceeded (2h) - forcing off + bypass");
+          // --- Max-run timer: heat (4 hours) → cooldown-and-resume, no bypass ---
+          if (id(heat_on_since) > 0 && now - id(heat_on_since) > 14400000) {
+            ESP_LOGE("safety", "Heat max-run exceeded (4h) - turning off, 10min cooldown");
             id(heat_sw).turn_off();
-            id(bypass_sw).turn_on();
+            id(heat_cooldown_until) = now + 600000;
           }
 
-          // --- Max-run timer: cool (2 hours) ---
-          if (id(cool_on_since) > 0 && now - id(cool_on_since) > 7200000) {
-            ESP_LOGE("safety", "Cool max-run exceeded (2h) - forcing off + bypass");
+          // --- Max-run timer: cool (4 hours) → cooldown-and-resume, no bypass ---
+          if (id(cool_on_since) > 0 && now - id(cool_on_since) > 14400000) {
+            ESP_LOGE("safety", "Cool max-run exceeded (4h) - turning off, 10min cooldown");
             id(cool_sw).turn_off();
-            id(bypass_sw).turn_on();
+            id(cool_cooldown_until) = now + 600000;
+          }
+
+          // --- Coil-freeze cutout during cooling (supply_temp in °C, BME280 raw) ---
+          // Thresholds: <3.3°C (~38°F) sustained 180s → shut off cool, keep fan+UV for thaw
+          // Lockout clears when supply rises above 7.2°C (~45°F). No bypass.
+          if (id(cool_on_since) > 0 && id(supply_temp).has_state()) {
+            if (id(supply_temp).state < 3.3f) {
+              if (id(cool_freeze_low_since) == 0) {
+                id(cool_freeze_low_since) = now;
+                ESP_LOGW("safety", "Supply temp low (%.1fC/<38F) while cooling - monitoring for freeze",
+                         id(supply_temp).state);
+              } else if (now - id(cool_freeze_low_since) > 180000) {
+                ESP_LOGE("safety", "Coil freeze: supply %.1fC/<38F for 180s - shutting off cool, keeping fan+UV for thaw",
+                         id(supply_temp).state);
+                id(cool_sw).turn_off();
+                // cool on_turn_off turns off fan/UV; re-enable immediately for coil thaw
+                id(fan_sw).turn_on();
+                id(uv_sw).turn_on();
+                id(cool_freeze_lockout) = true;
+                id(cool_freeze_low_since) = 0;
+              }
+            } else {
+              id(cool_freeze_low_since) = 0;
+            }
+          } else {
+            // Not cooling - keep monitor reset
+            id(cool_freeze_low_since) = 0;
+          }
+          // Clear freeze lockout when supply warms above 7.2°C (~45°F)
+          if (id(cool_freeze_lockout) && id(supply_temp).has_state() && id(supply_temp).state > 7.2f) {
+            ESP_LOGI("safety", "Coil thaw complete (supply %.1fC/>45F) - clearing freeze lockout",
+                     id(supply_temp).state);
+            id(cool_freeze_lockout) = false;
           }
 
           // --- Supply temp high limit (160F) ---
           if (id(heat_on_since) > 0 && id(supply_temp).has_state() && id(supply_temp).state > 160.0) {
             ESP_LOGE("safety", "Supply temp > 160F - heat exchanger limit exceeded");
             id(heat_sw).turn_off();
+            id(bypass_from_heartbeat) = false;  // hardware fault - do not auto-clear bypass on next heartbeat
             id(bypass_sw).turn_on();
           }
 
@@ -292,12 +362,16 @@ interval:
                      id(pressure_delta).state);
             id(heat_sw).turn_off();
             id(cool_sw).turn_off();
+            id(bypass_from_heartbeat) = false;  // hardware fault - do not auto-clear bypass on next heartbeat
             id(bypass_sw).turn_on();
           }
 
           // --- Keenect heartbeat watchdog (5 min) ---
-          if (id(last_heartbeat) > 0 && now - id(last_heartbeat) > 300000) {
+          // Only trip once per outage (guard !bypass_sw.state prevents re-setting bypass_from_heartbeat
+          // if another fault already took bypass for a hardware reason)
+          if (id(last_heartbeat) > 0 && now - id(last_heartbeat) > 300000 && !id(bypass_sw).state) {
             ESP_LOGW("safety", "No keenect heartbeat for 5min - activating bypass");
+            id(bypass_from_heartbeat) = true;
             id(bypass_sw).turn_on();
           }
 
@@ -359,6 +433,11 @@ switch:
     interlock_wait_time: 500ms
     on_turn_on:
       - lambda: |-
+          if (id(heat_cooldown_until) > 0 && millis() < id(heat_cooldown_until)) {
+            ESP_LOGW("safety", "Heat blocked: max-run cooldown active");
+            id(heat_sw).turn_off();
+            return;
+          }
           if (id(heat_last_off) > 0 && millis() - id(heat_last_off) < 120000) {
             ESP_LOGW("safety", "Short-cycle protection: heat blocked (< 120s since last off)");
             id(heat_sw).turn_off();
@@ -393,6 +472,16 @@ switch:
     interlock_wait_time: 500ms
     on_turn_on:
       - lambda: |-
+          if (id(cool_cooldown_until) > 0 && millis() < id(cool_cooldown_until)) {
+            ESP_LOGW("safety", "Cool blocked: max-run cooldown active");
+            id(cool_sw).turn_off();
+            return;
+          }
+          if (id(cool_freeze_lockout)) {
+            ESP_LOGW("safety", "Cool blocked: coil freeze lockout active (supply must warm above 45F/7.2C)");
+            id(cool_sw).turn_off();
+            return;
+          }
           if (id(cool_last_off) > 0 && millis() - id(cool_last_off) < 300000) {
             ESP_LOGW("safety", "Short-cycle protection: cool blocked (< 300s since last off)");
             id(cool_sw).turn_off();
