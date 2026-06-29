@@ -446,6 +446,8 @@ _st = {
     "outdoor_temp_last_changed": 0.0,  # timestamp when value last changed
     # Safety: consecutive all-None eval counter (debounce emergency shutoff)
     "all_none_count": 0,
+    # ETA: per-zone rolling (timestamp, temp) buffer for rate/ETA computation
+    "zone_temp_history": {},
 }
 
 
@@ -1065,43 +1067,17 @@ def _verify_vents():
 # Vent opening calculation
 # ---------------------------------------------------------------------------
 def _calc_opening(zone_name, zstate, temp, setpoint):
-    """Proportional vent opening based on temp delta."""
+    """Vent opening: full max_vo while zone demands, fan_vo for FAN ONLY, 0 otherwise.
+    No proportional taper — a demanding zone holds max until hysteresis threshold is met."""
     zone = ZONES[zone_name]
-    ctrl = zone["vent_control"]
-
     if zstate == "HEATING":
-        delta = setpoint - temp
-        mn, mx = zone["heat_min_vo"], zone["heat_max_vo"]
+        return zone["heat_max_vo"]
     elif zstate == "COOLING":
-        delta = temp - setpoint
-        mn, mx = zone["cool_min_vo"], zone["cool_max_vo"]
+        return zone["cool_max_vo"]
     elif zstate == "FAN ONLY":
         return zone["fan_vo"]
     else:
         return 0
-
-    rng = mx - mn
-    if ctrl == "Aggressive":
-        slope, intercept = rng * 2, rng / 5 + mn
-    elif ctrl == "Slow":
-        slope, intercept = rng / 2, mn
-    elif ctrl == "Binary":
-        slope, intercept = 10000, mn
-    else:  # Normal
-        slope, intercept = rng, mn
-
-    opening = round(delta * slope + intercept)
-
-    # Apply zone learning factor (slow zones get boosted, fast zones reduced)
-    factors = _st.get("zone_vent_factors", {}).get(zone_name, {})
-    if zstate == "HEATING":
-        factor = factors.get("heat_factor", 1.0)
-    else:
-        factor = factors.get("cool_factor", 1.0)
-    if factor != 1.0:
-        opening = round(opening * factor)
-
-    return max(mn, min(mx, opening))
 
 
 # ---------------------------------------------------------------------------
@@ -1325,6 +1301,87 @@ def _update_cost_sensors():
 
 
 # ---------------------------------------------------------------------------
+# ETA to target
+# ---------------------------------------------------------------------------
+def _update_eta_sensors(results):
+    """Compute per-zone ETA-to-target from rolling in-memory temp buffer.
+    Updates sensor.keenect_eta_{zone} for each zone in results.
+    Uses least-squares linear slope over last 10 min of temp readings.
+    Pyscript sandbox: no generator expressions — list comprehensions only."""
+    now = time_mod.time()
+    history_window = 600  # 10 minutes
+
+    if "zone_temp_history" not in _st:
+        _st["zone_temp_history"] = {}
+
+    for zone_name, r in results.items():
+        op = r["op"]
+        temp = r["temp"]
+        heat_sp = r["heat_sp"]
+        cool_sp = r["cool_sp"]
+
+        # Append current reading; trim to window (list comprehension)
+        buf = _st["zone_temp_history"].get(zone_name, [])
+        buf.append((now, temp))
+        cutoff = now - history_window
+        buf = [pt for pt in buf if pt[0] >= cutoff]
+        _st["zone_temp_history"][zone_name] = buf
+
+        # Determine active setpoint and direction
+        eta_state = "—"
+        rate_f_per_min = None
+        setpoint_used = None
+
+        if op == "HEATING" and heat_sp is not None:
+            setpoint_used = heat_sp
+            gap = heat_sp - temp          # positive when below setpoint
+        elif op == "COOLING" and cool_sp is not None:
+            setpoint_used = cool_sp
+            gap = temp - cool_sp          # positive when above setpoint
+        else:
+            gap = None
+
+        if gap is not None and gap > 0 and len(buf) >= 3:
+            # Least-squares linear slope over buffer (°F/min, signed)
+            t0 = buf[0][0]
+            n = len(buf)
+            xs = [(pt[0] - t0) / 60.0 for pt in buf]
+            ys = [pt[1] for pt in buf]
+            sum_x = sum(xs)
+            sum_y = sum(ys)
+            sum_xx = sum([x * x for x in xs])
+            sum_xy = sum([x * y for x, y in zip(xs, ys)])
+            denom = n * sum_xx - sum_x * sum_x
+            if abs(denom) > 1e-9:
+                slope = (n * sum_xy - sum_x * sum_y) / denom
+                rate_f_per_min = round(slope, 4)
+                if op == "HEATING" and slope > 0.001:
+                    eta_min = gap / slope
+                    eta_state = ">120" if eta_min > 120 else str(round(eta_min))
+                elif op == "COOLING" and slope < -0.001:
+                    eta_min = gap / abs(slope)
+                    eta_state = ">120" if eta_min > 120 else str(round(eta_min))
+                else:
+                    eta_state = "calculating…"
+            else:
+                eta_state = "calculating…"
+        elif gap is not None and gap > 0:
+            eta_state = "calculating…"
+
+        display = zone_name.replace("_", " ").title()
+        state.set(f"sensor.keenect_eta_{zone_name}", eta_state, {
+            "friendly_name": f"{display} ETA to Target",
+            "icon": "mdi:timer-outline",
+            "unit_of_measurement": "min",
+            "current_temp": temp,
+            "setpoint": setpoint_used,
+            "rate_f_per_min": rate_f_per_min,
+            "zone": zone_name,
+            "mode": op,
+        })
+
+
+# ---------------------------------------------------------------------------
 # Master evaluation
 # ---------------------------------------------------------------------------
 def _eval_master():
@@ -1425,6 +1482,7 @@ def _eval_master():
 
     # Pass 2: apply vent actions with complete picture (order-independent)
     _apply_zone_vents(results)
+    _update_eta_sensors(results)
 
     demanding = sum([1 for r in results.values() if r["op"] in ("HEATING", "COOLING")])
     mode = _hvac_mode()
