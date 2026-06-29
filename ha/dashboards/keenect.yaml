@@ -106,7 +106,21 @@ views:
                       - entity: input_boolean.away_gene
                         name: Away Mode
 
-      # Row 3: Controls (below zones)
+      # Row 3: ETA to Target
+      - type: entities
+        title: ETA to Target
+        show_header_toggle: false
+        entities:
+          - entity: sensor.keenect_eta_mbr
+            name: Master BR
+          - entity: sensor.keenect_eta_first_floor
+            name: 1st Floor
+          - entity: sensor.keenect_eta_ben
+            name: Ben
+          - entity: sensor.keenect_eta_gene
+            name: Gene
+
+      # Row 4: Controls (below zones)
       - type: entities
         title: HVAC Control
         show_header_toggle: false
