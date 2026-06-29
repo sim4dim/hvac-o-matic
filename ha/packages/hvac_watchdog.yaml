@@ -8,6 +8,12 @@ template:
           {{ (states('sensor.keenect_status') == 'COOLING' and states('switch.hvac_controller_cool') == 'off')
              or (states('sensor.keenect_status') == 'HEATING' and states('switch.hvac_controller_heat') == 'off') }}
 
+      - name: "HVAC Bypass Active"
+        unique_id: hvac_bypass_active
+        device_class: problem
+        icon: mdi:alert-circle-outline
+        state: "{{ states('switch.hvac_controller_bypass') == 'on' }}"
+
 automation:
   - alias: "HVAC Control Divergence Alert"
     id: hvac_control_divergence_alert
@@ -27,7 +33,7 @@ automation:
             Cool relay: {{ states('switch.hvac_controller_cool') }}.
             Sustained >10 min — check ESPHome/keenect.
           notification_id: hvac_control_divergence
-      - service: notify.itelephone
+      - service: notify.mobile_app_itelephone
         data:
           title: "HVAC Control Divergence"
           message: >
@@ -35,3 +41,32 @@ automation:
             Heat relay: {{ states('switch.hvac_controller_heat') }},
             Cool relay: {{ states('switch.hvac_controller_cool') }}.
             Sustained >10 min — check ESPHome/keenect.
+
+  - alias: "HVAC Bypass Active Alert"
+    id: hvac_bypass_active_alert
+    trigger:
+      - platform: state
+        entity_id: switch.hvac_controller_bypass
+        to: "on"
+        for: "00:05:00"
+    condition: []
+    action:
+      - service: persistent_notification.create
+        data:
+          title: "HVAC BYPASS ACTIVE"
+          message: >
+            HVAC is in BYPASS and has been for 5+ min. The Pearl backup thermostat
+            is OFF, so the house is NOT being heated/cooled. The ESP32 handed off
+            control due to a safety trip or manual toggle. Investigate now.
+            Keenect status: {{ states('sensor.keenect_status') }}.
+            Outdoor temp: {{ states('sensor.gw1000_outdoor_temperature') }}°F.
+          notification_id: hvac_bypass_active
+      - service: notify.mobile_app_itelephone
+        data:
+          title: "HVAC BYPASS ACTIVE"
+          message: >
+            HVAC is in BYPASS and has been for 5+ min. The Pearl backup thermostat
+            is OFF, so the house is NOT being heated/cooled. The ESP32 handed off
+            control due to a safety trip or manual toggle. Investigate now.
+            Keenect status: {{ states('sensor.keenect_status') }}.
+            Outdoor temp: {{ states('sensor.gw1000_outdoor_temperature') }}°F.
