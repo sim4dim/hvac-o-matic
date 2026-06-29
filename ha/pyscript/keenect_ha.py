@@ -1310,6 +1310,7 @@ def _update_eta_sensors(results):
     Pyscript sandbox: no generator expressions — list comprehensions only."""
     now = time_mod.time()
     history_window = 600  # 10 minutes
+    hyst = _hysteresis()  # zones run to setpoint -/+ hyst (see _eval_zone)
 
     if "zone_temp_history" not in _st:
         _st["zone_temp_history"] = {}
@@ -1334,10 +1335,12 @@ def _update_eta_sensors(results):
 
         if op == "HEATING" and heat_sp is not None:
             setpoint_used = heat_sp
-            gap = heat_sp - temp          # positive when below setpoint
+            # ETA targets the actual stop point (heat_sp + hyst), not the bare
+            # setpoint — the zone keeps heating through the hysteresis band.
+            gap = (heat_sp + hyst) - temp     # positive until it stops
         elif op == "COOLING" and cool_sp is not None:
             setpoint_used = cool_sp
-            gap = temp - cool_sp          # positive when above setpoint
+            gap = temp - (cool_sp - hyst)     # positive until it stops
         else:
             gap = None
 
