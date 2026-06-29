@@ -297,14 +297,14 @@ interval:
           if (id(heat_on_since) > 0 && now - id(heat_on_since) > 14400000) {
             ESP_LOGE("safety", "Heat max-run exceeded (4h) - turning off, 10min cooldown");
             id(heat_sw).turn_off();
-            id(heat_cooldown_until) = now + 600000;
+            { uint32_t _cu = now + 600000; id(heat_cooldown_until) = (_cu != 0) ? _cu : 1; }
           }
 
           // --- Max-run timer: cool (4 hours) → cooldown-and-resume, no bypass ---
           if (id(cool_on_since) > 0 && now - id(cool_on_since) > 14400000) {
             ESP_LOGE("safety", "Cool max-run exceeded (4h) - turning off, 10min cooldown");
             id(cool_sw).turn_off();
-            id(cool_cooldown_until) = now + 600000;
+            { uint32_t _cu = now + 600000; id(cool_cooldown_until) = (_cu != 0) ? _cu : 1; }
           }
 
           // --- Coil-freeze cutout during cooling (supply_temp in °C, BME280 raw) ---
@@ -313,7 +313,7 @@ interval:
           if (id(cool_on_since) > 0 && id(supply_temp).has_state()) {
             if (id(supply_temp).state < 3.3f) {
               if (id(cool_freeze_low_since) == 0) {
-                id(cool_freeze_low_since) = now;
+                id(cool_freeze_low_since) = (now != 0) ? now : 1;
                 ESP_LOGW("safety", "Supply temp low (%.1fC/<38F) while cooling - monitoring for freeze",
                          id(supply_temp).state);
               } else if (now - id(cool_freeze_low_since) > 180000) {
@@ -443,9 +443,10 @@ switch:
             id(heat_sw).turn_off();
             return;
           }
-          id(heat_on_since) = millis();
-      - switch.turn_on: fan_sw
-      - switch.turn_on: uv_sw
+          uint32_t _t = millis(); if (_t == 0) _t = 1;
+          id(heat_on_since) = _t;
+          id(fan_sw).turn_on();
+          id(uv_sw).turn_on();
     on_turn_off:
       - lambda: |-
           // Only stamp last_off on a genuine run→off transition.
@@ -453,7 +454,10 @@ switch:
           // cycle (boot ALWAYS_OFF or a short-cycle-blocked attempt called
           // turn_off) — stamping in those cases re-arms the guard window
           // against a run that never happened, causing livelock.
-          if (id(heat_on_since) != 0) id(heat_last_off) = millis();
+          if (id(heat_on_since) != 0) {
+            uint32_t _t = millis(); if (_t == 0) _t = 1;
+            id(heat_last_off) = _t;
+          }
           id(heat_on_since) = 0;
           if (!id(cool_sw).state) {
             id(fan_sw).turn_off();
@@ -487,9 +491,10 @@ switch:
             id(cool_sw).turn_off();
             return;
           }
-          id(cool_on_since) = millis();
-      - switch.turn_on: fan_sw
-      - switch.turn_on: uv_sw
+          uint32_t _t = millis(); if (_t == 0) _t = 1;
+          id(cool_on_since) = _t;
+          id(fan_sw).turn_on();
+          id(uv_sw).turn_on();
     on_turn_off:
       - lambda: |-
           // Only stamp last_off on a genuine run→off transition.
@@ -497,7 +502,10 @@ switch:
           // cycle (boot ALWAYS_OFF or a short-cycle-blocked attempt called
           // turn_off) — stamping in those cases re-arms the guard window
           // against a run that never happened, causing livelock.
-          if (id(cool_on_since) != 0) id(cool_last_off) = millis();
+          if (id(cool_on_since) != 0) {
+            uint32_t _t = millis(); if (_t == 0) _t = 1;
+            id(cool_last_off) = _t;
+          }
           id(cool_on_since) = 0;
           if (!id(heat_sw).state) {
             id(fan_sw).turn_off();
@@ -659,6 +667,13 @@ binary_sensor:
 
   - platform: status
     name: "Status"
+
+  # L2: supply sensor fault - ON when BME280 has no valid reading
+  - platform: template
+    name: "Supply Sensor Fault"
+    id: supply_sensor_fault
+    device_class: problem
+    lambda: "return !id(supply_temp).has_state();"
 
 # ---------------------------------------------------------------------------
 # BSEC2 hub for return-duct BME680 (IAQ / VOC-eq / CO2-eq)

@@ -405,6 +405,7 @@ VENT_STALE_SECONDS = 1800  # 30 minutes
 _PERSIST_KEYS = [
     "main_state", "hvac_on", "recirc_active", "zone_states",
     "hvac_off_time", "vents_closed_after_off",
+    "sensor_fail_parked", "all_none_count",
 ]
 
 # ---------------------------------------------------------------------------
@@ -476,6 +477,8 @@ def _save_state():
         "ot": _st["hvac_off_time"],
         "vc": 1 if _st["vents_closed_after_off"] else 0,
         "sv": sv,
+        "sfp": 1 if _st.get("sensor_fail_parked") else 0,  # L8: sensor_fail_parked
+        "anc": _st.get("all_none_count", 0),               # L8: all_none_count
     }
     # P7: Include cost tracking counters (heating/cooling runs and cycles)
     cost_keys = {
@@ -529,6 +532,9 @@ def _load_state():
         # Restore number/servo vent levels (lights report their own state)
         for key, val in data.get("sv", {}).items():
             _st["vent_levels"][key] = val
+        # L8: Restore safety flags
+        _st["sensor_fail_parked"] = bool(data.get("sfp", 0))
+        _st["all_none_count"] = int(data.get("anc", 0))
         # P7: Restore cost tracking counters
         _st["heat_runtime"] = data.get("hr", 0.0)
         _st["heat_cost"] = data.get("hc", 0.0)
@@ -731,6 +737,13 @@ def _hvac_push(button):
         return False
     failed = []
     for action, entity in actions:
+        # L9: check switch availability before issuing command — unavailable switch
+        # must count as a failure so the push_fail_count / auto-disable logic engages.
+        sw_state = state.get(entity)
+        if sw_state in ("unavailable", "unknown", None):
+            log.error(f"keenect: ESPHome {entity} offline (state={sw_state}), treating as push failure")
+            failed.append(entity)
+            continue
         try:
             if action == "turn_on":
                 switch.turn_on(entity_id=entity)
@@ -1181,6 +1194,14 @@ def _eval_zone(zone_name):
             op = "COOLING"
         elif tstat_action == "COOLING":
             op = "COOLING"
+        elif op_raw is None and not is_away and temp > cool_sp + hyst:
+            # L5: climate_template hvac_action unavailable — raw-sensor fallback for COOL START.
+            # Uses setpoint + hysteresis (conservative) to avoid false triggers.
+            op = "COOLING"
+            log.warning(
+                f"keenect: {zone_name} COOL START via raw-sensor fallback "
+                f"(hvac_action unavailable, temp={temp:.1f} > {cool_sp + hyst:.1f})"
+            )
 
     return {"op": op, "old": old, "temp": temp, "heat_sp": heat_sp, "cool_sp": cool_sp, "hyst": hyst}
 
@@ -1396,6 +1417,11 @@ def _eval_master():
         # At least one zone healthy — reset the debounce counter
         if _st.get("all_none_count", 0) > 0:
             _st["all_none_count"] = 0
+        # L7: clear sensor_fail_parked once ALL sensors are healthy so it cannot
+        # cause a spurious circulation-vent close after sensors recover.
+        if not none_zones and _st.get("sensor_fail_parked"):
+            _st["sensor_fail_parked"] = False
+            log.info("keenect: all sensors healthy, clearing sensor_fail_parked flag")
 
     # Pass 2: apply vent actions with complete picture (order-independent)
     _apply_zone_vents(results)
@@ -2059,6 +2085,8 @@ def on_circ_optout_change(**kwargs):
     try:
         if not _circ_enabled() and not _st["recirc_active"]:
             return  # nothing to do if circulation isn't running
+        if _st["hvac_on"]:
+            return  # L6: don't stomp zone vents during active HVAC run
         eid = kwargs.get("var_name", "")
         # Extract zone name: input_boolean.circ_optout_ben -> ben
         zn = eid.replace("input_boolean.circ_optout_", "")
