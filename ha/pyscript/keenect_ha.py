@@ -2400,7 +2400,7 @@ def _update_zone_rates_sensor(rates, factors):
 
 def _learn_drift_rates():
     """Analyze how fast each zone loses heat when HVAC is off (insulation metric)."""
-    outdoor_temps = _influx_series("outdoor_temperature", days=ZONE_LEARN_DAYS, interval_min=30)
+    outdoor_temps = _influx_series(OUTDOOR_TEMP_ENTITY.replace("sensor.", ""), days=ZONE_LEARN_DAYS, interval_min=30)
     if len(outdoor_temps) < 10:
         log.warning("keenect: drift analysis - no outdoor temp data")
         return {}
