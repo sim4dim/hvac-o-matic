@@ -448,6 +448,9 @@ _st = {
     "all_none_count": 0,
     # ETA: per-zone rolling (timestamp, temp) buffer for rate/ETA computation
     "zone_temp_history": {},
+    # Setpoint attribution: zone -> (user_name, timestamp) captured from climate.set_temperature
+    # so the follow-on input_number change can be attributed to the real user.
+    "setpoint_user_pending": {},
 }
 
 
@@ -1344,8 +1347,9 @@ def _update_eta_sensors(results):
         else:
             gap = None
 
-        if gap is not None and gap > 0 and len(buf) >= 3:
-            # Least-squares linear slope over buffer (°F/min, signed)
+        # Compute least-squares linear slope once per zone for reuse below.
+        slope = None
+        if len(buf) >= 3:
             t0 = buf[0][0]
             n = len(buf)
             xs = [(pt[0] - t0) / 60.0 for pt in buf]
@@ -1358,6 +1362,10 @@ def _update_eta_sensors(results):
             if abs(denom) > 1e-9:
                 slope = (n * sum_xy - sum_x * sum_y) / denom
                 rate_f_per_min = round(slope, 4)
+
+        # ETA to target (HEATING / COOLING zones)
+        if gap is not None and gap > 0:
+            if slope is not None:
                 if op == "HEATING" and slope > 0.001:
                     eta_min = gap / slope
                     eta_state = ">120" if eta_min > 120 else str(round(eta_min))
@@ -1368,8 +1376,32 @@ def _update_eta_sensors(results):
                     eta_state = "calculating…"
             else:
                 eta_state = "calculating…"
-        elif gap is not None and gap > 0:
-            eta_state = "calculating…"
+
+        # ETA to start (IDLE zones): how long until temp drifts to the demand threshold?
+        eta_start_state = "—"
+        setpoint_start = None
+        if op == "IDLE":
+            sys_mode = _hvac_mode()
+            if sys_mode == "HEAT" and heat_sp is not None:
+                setpoint_start = heat_sp
+                gap_start = temp - heat_sp  # positive when above setpoint
+                if gap_start <= 0:
+                    eta_start_state = "—"
+                elif slope is not None and slope < -0.001:
+                    eta_min = gap_start / abs(slope)
+                    eta_start_state = ">120" if eta_min > 120 else str(round(eta_min))
+                else:
+                    eta_start_state = "calculating…"
+            elif sys_mode == "COOL" and cool_sp is not None:
+                setpoint_start = cool_sp
+                gap_start = cool_sp - temp  # positive when below setpoint
+                if gap_start <= 0:
+                    eta_start_state = "—"
+                elif slope is not None and slope > 0.001:
+                    eta_min = gap_start / slope
+                    eta_start_state = ">120" if eta_min > 120 else str(round(eta_min))
+                else:
+                    eta_start_state = "calculating…"
 
         display = zone_name.replace("_", " ").title()
         state.set(f"sensor.keenect_eta_{zone_name}", eta_state, {
@@ -1378,6 +1410,16 @@ def _update_eta_sensors(results):
             "unit_of_measurement": "min",
             "current_temp": temp,
             "setpoint": setpoint_used,
+            "rate_f_per_min": rate_f_per_min,
+            "zone": zone_name,
+            "mode": op,
+        })
+        state.set(f"sensor.keenect_eta_start_{zone_name}", eta_start_state, {
+            "friendly_name": f"{display} ETA to Start",
+            "icon": "mdi:timer-sand",
+            "unit_of_measurement": "min",
+            "current_temp": temp,
+            "setpoint": setpoint_start,
             "rate_f_per_min": rate_f_per_min,
             "zone": zone_name,
             "mode": op,
@@ -2192,6 +2234,11 @@ def on_setpoint_change(**kwargs):
         context = kwargs.get("context")
         user_id = context.user_id if context else None
         user = _resolve_user(user_id)
+        if user == "System":
+            pending = _st["setpoint_user_pending"].get(zone)
+            if pending and (time_mod.time() - pending[1]) < 10:
+                user = pending[0]
+                _st["setpoint_user_pending"].pop(zone, None)
 
         now = dt_mod.datetime.now()
         entry = {
@@ -2210,6 +2257,37 @@ def on_setpoint_change(**kwargs):
         _save_setpoint_log()
     except Exception as e:
         log.error(f"keenect: on_setpoint_change crashed: {e}")
+
+
+@event_trigger("call_service", "domain == 'climate' and service == 'set_temperature'")
+def on_climate_set_temperature(**kwargs):
+    """Capture real user from climate.set_temperature before input_number chain loses context.
+
+    When a user adjusts a thermostat via the HA UI, the call arrives as
+    climate.set_temperature with a real user_id in context.  The climate_template
+    YAML action then calls input_number.set_value with a fresh system context
+    (user_id=None), so on_setpoint_change would record "System".  We stash the
+    resolved user name here so on_setpoint_change can reclaim it within 10 s.
+    """
+    try:
+        if kwargs.get("domain") != "climate" or kwargs.get("service") != "set_temperature":
+            return
+        ctx = kwargs.get("context") or {}
+        user_id = ctx.get("user_id") if isinstance(ctx, dict) else getattr(ctx, "user_id", None)
+        user = _resolve_user(user_id)
+        sd = kwargs.get("service_data") or {}
+        target = sd.get("target") or kwargs.get("target") or {}
+        entity_ids = sd.get("entity_id") or (target.get("entity_id") if isinstance(target, dict) else None) or []
+        if isinstance(entity_ids, str):
+            entity_ids = [entity_ids]
+        # Derive climate→zone mapping from ZONES (thermostat key)
+        climate_to_zone = {zone["thermostat"]: zn for zn, zone in ZONES.items()}
+        for eid in entity_ids:
+            zone = climate_to_zone.get(eid)
+            if zone:
+                _st["setpoint_user_pending"][zone] = (user, time_mod.time())
+    except Exception as e:
+        log.error(f"keenect: on_climate_set_temperature crashed: {e}")
 
 
 @state_trigger(
