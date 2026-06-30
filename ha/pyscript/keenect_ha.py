@@ -1382,26 +1382,33 @@ def _update_eta_sensors(results):
         setpoint_start = None
         if op == "IDLE":
             sys_mode = _hvac_mode()
+            # "calculating…" = not enough data yet (no slope); "stable" = we have
+            # a trend but temp is flat or drifting AWAY from the threshold, so no
+            # cycle is approaching (common at idle when HVAC is holding the house).
             if sys_mode == "HEAT" and heat_sp is not None:
                 setpoint_start = heat_sp
                 gap_start = temp - heat_sp  # positive when above setpoint
                 if gap_start <= 0:
                     eta_start_state = "—"
-                elif slope is not None and slope < -0.001:
+                elif slope is None:
+                    eta_start_state = "calculating…"
+                elif slope < -0.001:  # cooling toward the heat threshold
                     eta_min = gap_start / abs(slope)
                     eta_start_state = ">120" if eta_min > 120 else str(round(eta_min))
                 else:
-                    eta_start_state = "calculating…"
+                    eta_start_state = "stable"
             elif sys_mode == "COOL" and cool_sp is not None:
                 setpoint_start = cool_sp
                 gap_start = cool_sp - temp  # positive when below setpoint
                 if gap_start <= 0:
                     eta_start_state = "—"
-                elif slope is not None and slope > 0.001:
+                elif slope is None:
+                    eta_start_state = "calculating…"
+                elif slope > 0.001:  # warming toward the cool threshold
                     eta_min = gap_start / slope
                     eta_start_state = ">120" if eta_min > 120 else str(round(eta_min))
                 else:
-                    eta_start_state = "calculating…"
+                    eta_start_state = "stable"
 
         display = zone_name.replace("_", " ").title()
         state.set(f"sensor.keenect_eta_{zone_name}", eta_state, {
