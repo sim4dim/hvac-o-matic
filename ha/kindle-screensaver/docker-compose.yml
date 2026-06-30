@@ -6,7 +6,7 @@ services:
     environment:
       HA_BASE_URL: http://192.168.1.151:8123
       HA_SCREENSHOT_URL: /kindle-dash/kindle?kiosk
-      HA_ACCESS_TOKEN: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiIyMTA5Zjc2NzU0YWE0ZDlkYWRiYTM0Zjc3MTg5ZDE0NSIsImlhdCI6MTc3MDIyMTg3NCwiZXhwIjoyMDg1NTgxODc0fQ._Mnv_GPItY4BCMafDps_no0cn0pYN5BXiHELBEHqU68
+      HA_ACCESS_TOKEN: ${HA_ACCESS_TOKEN:?set HA_ACCESS_TOKEN in ha/kindle-screensaver/.env (gitignored)}
       CRON_JOB: "* * * * *"
       RENDERING_TIMEOUT: 30000
       RENDERING_DELAY: 3000

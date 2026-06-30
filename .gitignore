@@ -1,3 +1,8 @@
 .claude/
 secrets.yaml
 logs/
+
+# secrets / env files (never commit tokens)
+.env
+**/.env
+*.env
