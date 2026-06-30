@@ -1,0 +1,26 @@
+services:
+  kindle-screensaver:
+    image: sibbl/hass-lovelace-kindle-screensaver:latest
+    container_name: kindle-screensaver
+    restart: unless-stopped
+    environment:
+      HA_BASE_URL: http://192.168.1.151:8123
+      HA_SCREENSHOT_URL: /kindle-dash/kindle?kiosk
+      HA_ACCESS_TOKEN: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiIyMTA5Zjc2NzU0YWE0ZDlkYWRiYTM0Zjc3MTg5ZDE0NSIsImlhdCI6MTc3MDIyMTg3NCwiZXhwIjoyMDg1NTgxODc0fQ._Mnv_GPItY4BCMafDps_no0cn0pYN5BXiHELBEHqU68
+      CRON_JOB: "* * * * *"
+      RENDERING_TIMEOUT: 30000
+      RENDERING_DELAY: 3000
+      RENDERING_SCREEN_HEIGHT: 800
+      RENDERING_SCREEN_WIDTH: 600
+      GRAYSCALE_DEPTH: 8
+      ROTATION: 0
+      OUTPUT_PATH: /output/cover
+      PORT: "5000"
+      LANGUAGE: en
+      SCALING: 1
+      TZ: America/New_York
+    ports:
+      - "5100:5000"
+    volumes:
+      - ./output:/output
+      - /etc/localtime:/etc/localtime:ro

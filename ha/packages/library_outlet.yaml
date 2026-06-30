@@ -1,0 +1,20 @@
+automation:
+  - alias: "Library Outlet On at Sunrise"
+    description: "Turn on library outlet at sunrise"
+    trigger:
+      - platform: sun
+        event: sunrise
+    action:
+      - service: switch.turn_on
+        target:
+          entity_id: switch.library_outlet
+
+  - alias: "Library Outlet Off at Sunset"
+    description: "Turn off library outlet at sunset"
+    trigger:
+      - platform: sun
+        event: sunset
+    action:
+      - service: switch.turn_off
+        target:
+          entity_id: switch.library_outlet

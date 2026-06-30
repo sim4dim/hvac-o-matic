@@ -1,0 +1,24 @@
+automation:
+  - alias: "Master Bathroom Fan Auto-Off"
+    description: "Turn off master bathroom fan after 30 minutes or when humidity drops below 55%"
+    mode: restart
+    trigger:
+      - platform: state
+        entity_id: switch.master_bathroom_fan
+        to: "on"
+    action:
+      - wait_for_trigger:
+          - platform: numeric_state
+            entity_id: sensor.master_bathroom_temperature_humidity
+            below: 55
+          - platform: state
+            entity_id: switch.master_bathroom_fan
+            to: "off"
+        timeout: "00:30:00"
+        continue_on_timeout: true
+      - condition: state
+        entity_id: switch.master_bathroom_fan
+        state: "on"
+      - service: switch.turn_off
+        target:
+          entity_id: switch.master_bathroom_fan
