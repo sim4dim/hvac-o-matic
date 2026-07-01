@@ -862,23 +862,24 @@ display:
       } else {
         // Sensor screen
         if (id(supply_temp).has_state()) {
+          float supply_f = id(supply_temp).state * 9.0/5.0 + 32;
           it.printf(0, 0, id(font1), "S:%.1fF %d%%",
-            id(supply_temp).state, (int)id(supply_hum).state);
+            supply_f, (int)id(supply_hum).state);
         } else {
           it.printf(0, 0, id(font1), "S:--");
         }
         if (id(return_temp).has_state()) {
+          float return_f = id(return_temp).state * 9.0/5.0 + 32;
           it.printf(0, 13, id(font1), "R:%.1fF %d%%",
-            id(return_temp).state, (int)id(return_hum).state);
+            return_f, (int)id(return_hum).state);
         } else {
           it.printf(0, 13, id(font1), "R:--");
         }
         if (id(pressure_delta).has_state()) {
           it.printf(0, 26, id(font1), "dP: %.1f hPa", id(pressure_delta).state);
         }
-        if (id(supply_temp).has_state() && id(return_temp).has_state()) {
-          float dt = id(supply_temp).state - id(return_temp).state;
-          it.printf(0, 39, id(font1), "dT: %+.1fF", dt);
+        if (id(temp_delta).has_state()) {
+          it.printf(0, 39, id(font1), "dT: %+.1fF", id(temp_delta).state);
         }
         if (id(return_voc).has_state()) {
           auto voc = id(return_voc).state;
