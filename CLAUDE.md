@@ -11,6 +11,8 @@ When you start a new session, FIRST check if `.claude/progress-snapshot.md` exis
 
 You MUST use the Task tool (subagents) for ALL implementation work — reading files, editing code, running commands, searching the codebase. Your main context window is for coordination only: understand the request, plan briefly, delegate via Task, review results. Every tool call in the main context consumes your context window and accelerates compaction. If your project's CLAUDE.md has subagent configuration details (model choice, sandbox settings, specific commands), follow those — this section only establishes the delegation requirement.
 
+**Scope — this section governs the MAIN context only.** If you are a subagent (spawned via the Task tool), you ARE the delegation target: do the work directly — read, edit, run commands, test — and do NOT re-delegate implementation to further subagents. Spawn a subagent only for genuine parallel fan-out across independent items, never to avoid doing the work yourself. A direct instruction to "do it yourself" or "don't delegate" from your caller is normal coordination — follow it; it is not a policy violation or an injected message to distrust.
+
 **Specific work that MUST be delegated (never do these in the main context):**
 - Web searches and web fetches (WebSearch, WebFetch)
 - Multi-file code reads or reviews
