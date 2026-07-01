@@ -675,6 +675,29 @@ binary_sensor:
     device_class: problem
     lambda: "return !id(supply_temp).has_state();"
 
+  # Safety-state visibility: expose internal cooldown/lockout/watchdog globals to HA
+  - platform: template
+    name: "Cool Cooldown Active"
+    id: cool_cooldown_active
+    lambda: "return id(cool_cooldown_until) > 0 && millis() < id(cool_cooldown_until);"
+
+  - platform: template
+    name: "Heat Cooldown Active"
+    id: heat_cooldown_active
+    lambda: "return id(heat_cooldown_until) > 0 && millis() < id(heat_cooldown_until);"
+
+  - platform: template
+    name: "Coil Freeze Lockout"
+    id: coil_freeze_lockout
+    device_class: problem
+    lambda: "return id(cool_freeze_lockout);"
+
+  - platform: template
+    name: "Safety Watchdog Tripped"
+    id: safety_watchdog_tripped
+    device_class: problem
+    lambda: "return id(watchdog_tripped);"
+
 # ---------------------------------------------------------------------------
 # BSEC2 hub for return-duct BME680 (IAQ / VOC-eq / CO2-eq)
 # ---------------------------------------------------------------------------

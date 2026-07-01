@@ -5,8 +5,10 @@ template:
         device_class: problem
         icon: mdi:alert-circle
         state: >
-          {{ (states('sensor.keenect_status') == 'COOLING' and states('switch.hvac_controller_cool') == 'off')
-             or (states('sensor.keenect_status') == 'HEATING' and states('switch.hvac_controller_heat') == 'off') }}
+          {{ (states('sensor.keenect_status') == 'COOLING' and states('switch.hvac_controller_cool') == 'off'
+                and not is_state('binary_sensor.hvac_controller_cool_cooldown_active','on'))
+             or (states('sensor.keenect_status') == 'HEATING' and states('switch.hvac_controller_heat') == 'off'
+                and not is_state('binary_sensor.hvac_controller_heat_cooldown_active','on')) }}
 
       - name: "HVAC Bypass Active"
         unique_id: hvac_bypass_active
