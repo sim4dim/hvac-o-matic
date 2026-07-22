@@ -1265,11 +1265,7 @@ def _track_cost():
         _st["heat_runtime"] += elapsed_h
         _st["heat_cost"] += cost
     elif mode == "COOL":
-        ac_kw = _float("input_number.ac_wattage", 3500) / 1000.0
-        price = _float("sensor.current_electric_rate", 0.20)
-        cost = ac_kw * elapsed_h * price
         _st["cool_runtime"] += elapsed_h
-        _st["cool_cost"] += cost
     _update_cost_sensors()
 
 
@@ -1294,12 +1290,6 @@ def _update_cost_sensors():
         "device_class": "duration",
         "icon": "mdi:snowflake",
         "friendly_name": "Cooling Runtime",
-    })
-    state.set("sensor.hvac_cool_cost", round(_st["cool_cost"], 2), {
-        "unit_of_measurement": "$",
-        "state_class": "total_increasing",
-        "icon": "mdi:currency-usd",
-        "friendly_name": "Cooling Cost",
     })
 
 

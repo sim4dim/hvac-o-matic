@@ -134,12 +134,6 @@ utility_meter:
   hvac_heat_runtime_monthly:
     source: sensor.hvac_heat_runtime
     cycle: monthly
-  hvac_cool_cost_daily:
-    source: sensor.hvac_cool_cost
-    cycle: daily
-  hvac_cool_cost_monthly:
-    source: sensor.hvac_cool_cost
-    cycle: monthly
   hvac_cool_runtime_daily:
     source: sensor.hvac_cool_runtime
     cycle: daily
