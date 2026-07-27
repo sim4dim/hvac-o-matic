@@ -6,7 +6,20 @@ Controls Keen smart vents via Hubitat integration (Zigbee radios on Hubitat).
 HVAC furnace controlled directly via HTTP to Flask server (bypasses Hubitat).
 First floor servo register controlled via ESPHome native API (number entity).
 
-Version: 2.6.3 — safety: enabling continuous circulation while HVAC is active no longer stomps zone vent positions (defers vent-open until idle); circulation can't override heat/cool
+Version: 2.6.5 — NIT-1 concurrency hardening: _hvac_turn_on() now sets
+_st["hvac_on"] = True before pushing the heat/cool/fan relays (each push is an
+await point) instead of after, so a concurrent trigger (on_electricity_price_
+change -> _reconcile_peak_lockout, or on_circ_change) that interleaves during
+turn-on sees hvac_on=True and no-ops its fanOff/vent-close path instead of
+racing in while heat/cool is being asserted. Reverted to False on push
+failure. _hvac_turn_off() is unchanged (see NIT-1 review notes) — its flip to
+False already happens after its pushes, which is the safe direction.
+
+Version: 2.6.4 — on-peak circulation lockout: Periodic/Continuous circulation and
+smart recirculation are suppressed during on-peak TOU windows (input_boolean.
+circ_peak_lockout + sensor.electricity_price period=on-peak) to avoid running the
+blower at peak electric rates. Fails open (circulation runs normally) if the price
+signal is missing/unavailable. Heat/cool demand is never gated by this.
 """
 
 import datetime as dt_mod
@@ -592,8 +605,33 @@ def _recirc_enabled():
     return state.get("input_boolean.enable_recirculation") == "on"
 
 
+def _peak_lockout():
+    """True only when the on-peak circulation lockout is armed AND we are
+    currently inside an on-peak TOU window (sensor.electricity_price is owned
+    by the housekeeping project — read-only here).
+
+    FAILS OPEN: if the lockout toggle is off, or the price sensor/attribute is
+    missing, unavailable, or errors, returns False (circulation runs normally).
+    A broken/absent housekeeping sensor must never suppress our fan behavior.
+    """
+    try:
+        if state.get("input_boolean.circ_peak_lockout") != "on":
+            return False
+        attrs = state.getattr("sensor.electricity_price")
+        period = attrs.get("period") if attrs else None
+    except Exception as e:
+        # ANY read failure (missing toggle entity, absent/unavailable price
+        # sensor, missing attribute) must fail open — a broken helper must
+        # never crash the master control loop or suppress our fan behavior.
+        log.warning(f"keenect: peak lockout read failed, failing open: {e}")
+        return False
+    if period is None:
+        return False
+    return period == "on-peak"
+
+
 def _circ_enabled():
-    return state.get("input_boolean.enable_circulation") == "on"
+    return state.get("input_boolean.enable_circulation") == "on" and not _peak_lockout()
 
 
 def _zone_circ_excluded(zn):
@@ -853,11 +891,26 @@ def _hvac_turn_on():
     _st["hvac_off_time"] = None
     _st["vents_closed_after_off"] = True
 
+    # NIT-1: flip hvac_on True before the relay pushes below, each of which is
+    # an await point (switch.turn_on/off) where a concurrent trigger (e.g.
+    # on_electricity_price_change -> _reconcile_peak_lockout, or
+    # on_circ_change) can interleave. Those triggers check `not
+    # _st["hvac_on"]` before pushing fanOff/closing vents; if hvac_on were
+    # still False while heatOn/coolOn had already been pushed, they'd race in
+    # and kill the fan/vents under active heat/cool. Flipping it first makes
+    # them see hvac_on=True and no-op instead. All prior branches in this
+    # function (short-cycle, cool-lockout, mode-mismatch at line ~872) read
+    # _st["hvac_on"] before this point, so they still see the pre-call value.
+    # Reverted below on push failure so a failed turn-on doesn't leave
+    # hvac_on=True with the relays not reliably engaged.
+    _st["hvac_on"] = True
+
     if mode == "HEAT":
         ok1 = _hvac_push(2)        # heatOn
         ok2 = _hvac_push(6)        # fanOn
         if not ok1 or not ok2:
             log.error("keenect: HVAC HEAT on push failed, not updating state")
+            _st["hvac_on"] = False
             return
         _st["main_state"] = "HEATING"
     elif mode == "COOL":
@@ -865,11 +918,12 @@ def _hvac_turn_on():
         ok2 = _hvac_push(6)        # fanOn
         if not ok1 or not ok2:
             log.error("keenect: HVAC COOL on push failed, not updating state")
+            _st["hvac_on"] = False
             return
         _st["main_state"] = "COOLING"
     else:
+        _st["hvac_on"] = False
         return
-    _st["hvac_on"] = True
     _st["last_hvac_on_time"] = time_mod.time()
     _st["warmup_start"] = time_mod.time()
     log.info(f"keenect: HVAC ON in {mode} mode (warmup started)")
@@ -1627,6 +1681,15 @@ def _check_recirc():
     if not _recirc_enabled() or not _enabled():
         return
 
+    if _peak_lockout():
+        # Never start (or continue) smart recirculation during an on-peak
+        # window. Zone demand always wins over this — _stop_recirc only
+        # touches the fan/vents, it never gates heat/cool.
+        if _st["recirc_active"]:
+            _stop_recirc("On-peak lockout")
+        _st["last_all_idle"] = None
+        return
+
     now = time_mod.time()
     delay_s = _recirc_delay_min() * 60
 
@@ -2147,6 +2210,33 @@ def on_enable_change(**kwargs):
         log.error(f"keenect: on_enable_change crashed: {e}")
 
 
+def _circ_start_effects():
+    """Open non-excluded zone vents to fan position and turn the blower on.
+
+    Shared by on_circ_change (enable_circulation -> on) and
+    on_electricity_price_change (on-peak window ends while circulation should
+    be running) so the two triggers can't drift apart.
+    """
+    for zn, zone in ZONES.items():
+        if not _zone_circ_excluded(zn):
+            _set_vent(zn, zone.get("fan_vo", 30))
+    _hvac_push(6)  # fanOn
+
+
+def _circ_stop_effects():
+    """Turn the blower off and close vents, unless HVAC or recirc is active.
+
+    Shared by on_circ_change (enable_circulation -> off) and
+    on_electricity_price_change (on-peak window begins while circulation was
+    running). Demand priority is preserved here: if hvac_on, nothing happens
+    — heat/cool owns the fan/vents until it finishes on its own.
+    """
+    if not _st["hvac_on"] and not _st["recirc_active"]:
+        _hvac_push(7)  # fanOff
+        if _all_idle():
+            _close_all_vents()
+
+
 @state_trigger("input_boolean.enable_circulation")
 def on_circ_change(**kwargs):
     """React to continuous circulation toggle."""
@@ -2161,21 +2251,65 @@ def on_circ_change(**kwargs):
                 # heat/cool run ends. (Prevents circulation overriding heat/cool.)
                 log.info("keenect: circulation enabled while HVAC active — deferring vents until idle")
             else:
-                # Open non-excluded vents to fan position and turn fan on
-                for zn, zone in ZONES.items():
-                    if not _zone_circ_excluded(zn):
-                        _set_vent(zn, zone.get("fan_vo", 30))
-                _hvac_push(6)  # fanOn
+                _circ_start_effects()
         else:
-            # Turn fan off and close vents (unless HVAC or recirc is active)
-            if not _st["hvac_on"] and not _st["recirc_active"]:
-                _hvac_push(7)  # fanOff
-                if _all_idle():
-                    _close_all_vents()
+            _circ_stop_effects()
         _update_status()
         _save_if_changed()
     except Exception as e:
         log.error(f"keenect: on_circ_change crashed: {e}")
+
+
+def _reconcile_peak_lockout(reason):
+    """Re-evaluate circulation against the current on-peak lockout state.
+
+    Called whenever a signal feeding _peak_lockout() changes (the TOU period,
+    or the user's circ_peak_lockout escape-hatch toggle) so the fan/vents
+    don't have to wait for the next 15s eval-master pass or the next Periodic
+    :00/:10 trigger to catch up — that matters most for Continuous mode,
+    which never re-fires input_boolean.enable_circulation itself, and for the
+    manual toggle, whose only other feedback path (eval-master idle
+    reconciliation) fixes vent positions but never the fan relay.
+
+    Only touches fan-only circulation/recirculation — heat/cool demand is
+    never gated here, and _circ_stop_effects/_stop_recirc both no-op the
+    fan/vent changes while hvac_on so an active heat/cool run is untouched.
+    """
+    locked = _peak_lockout()
+
+    # Smart recirculation: end it immediately if lockout just engaged.
+    if locked and _st["recirc_active"]:
+        _stop_recirc("On-peak lockout")
+
+    # Periodic/Continuous circulation: reconcile fan+vents to the new state.
+    if state.get("input_boolean.enable_circulation") == "on":
+        if locked:
+            log.info(f"keenect: on-peak lockout engaged ({reason}) — suspending circulation")
+            _circ_stop_effects()
+        elif not _st["hvac_on"]:
+            log.info(f"keenect: on-peak lockout cleared ({reason}) — resuming circulation")
+            _circ_start_effects()
+
+    _update_status()
+    _save_if_changed()
+
+
+@state_trigger("sensor.electricity_price")
+def on_electricity_price_change(**kwargs):
+    """Re-evaluate circulation when the TOU period changes (on-peak boundary)."""
+    try:
+        _reconcile_peak_lockout("price period changed")
+    except Exception as e:
+        log.error(f"keenect: on_electricity_price_change crashed: {e}")
+
+
+@state_trigger("input_boolean.circ_peak_lockout")
+def on_peak_lockout_toggle_change(**kwargs):
+    """React to the user's on-peak lockout escape-hatch toggle."""
+    try:
+        _reconcile_peak_lockout("lockout toggle changed")
+    except Exception as e:
+        log.error(f"keenect: on_peak_lockout_toggle_change crashed: {e}")
 
 
 @state_trigger("input_boolean.circ_optout_ben", "input_boolean.circ_optout_gene",

@@ -75,6 +75,14 @@ automation:
               # stomp zone vents). keenect_status reads HEATING/COOLING when hvac_on.
               - condition: template
                 value_template: "{{ states('sensor.keenect_status') not in ['HEATING', 'COOLING'] }}"
+              # Belt-and-suspenders: don't even request circulation during an
+              # on-peak TOU window. pyscript's _peak_lockout()/_circ_enabled()
+              # gate is authoritative (also covers Continuous mode and mid-window
+              # transitions) — this just avoids the pointless on/off blip.
+              - condition: template
+                value_template: >
+                  {{ not (is_state('input_boolean.circ_peak_lockout', 'on')
+                     and state_attr('sensor.electricity_price', 'period') == 'on-peak') }}
             sequence:
               - service: input_boolean.turn_on
                 target:

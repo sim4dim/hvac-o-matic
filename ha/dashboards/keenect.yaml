@@ -652,6 +652,8 @@ views:
             name: Circulation Mode
           - entity: input_boolean.enable_circulation
             name: Circulation Active
+          - entity: input_boolean.circ_peak_lockout
+            name: Circulation On-Peak Lockout
       - type: entities
         title: Energy Tracking
         show_header_toggle: false

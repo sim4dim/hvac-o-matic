@@ -105,6 +105,11 @@ input_boolean:
     name: Enable Continuous Circulation
     icon: mdi:fan-auto
 
+  circ_peak_lockout:
+    name: Circulation On-Peak Lockout
+    icon: mdi:transmission-tower-off
+    initial: on
+
   away_ben:
     name: "Ben's Room Away"
     icon: mdi:home-export-outline
