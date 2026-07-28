@@ -1,3 +1,9 @@
+# ⚠️ MOVED 2026-07-28 — housekeeping now owns this (housekeeping/ha/dashboards/boat.yaml). Do NOT deploy this copy.
+#
+# Synced from live HA 2026-07-28. Live sha256 (2026-07-28): 49f68fccec04335e06e29a1a52dac588b7620d9565c508412b75e740e757e40e
+# Reason: repo copy was over a month stale, AND today (2026-07-28 09:16) housekeeping deployed a
+# "freshness fix" to this dashboard live with no corresponding repo source anywhere — this pull
+# closes that orphan and brings hvac's source back in sync with the current live content.
 title: Boat
 views:
   - title: Now
@@ -15,11 +21,16 @@ views:
             cards:
               - type: custom:mushroom-template-card
                 primary: >-
-                  {% set s = states('sensor.boat_status') %}
                   {% set yd = states('binary_sensor.boat_ydwg_connected') %}
-                  {% if s == 'online' and yd == 'on' %}Boat online
-                  {% elif s == 'online' %}Boat online · NMEA gateway offline
-                  {% else %}Boat offline
+                  {% set has_ts = has_value('sensor.boat_last_update') %}
+                  {% set age_s = ((now().timestamp() - as_timestamp(states('sensor.boat_last_update'), default=0)) | int) if has_ts else none %}
+                  {% set fresh = has_ts and age_s < 300 %}
+                  {% if fresh and yd == 'on' %}Boat online
+                  {% elif fresh %}Boat online · NMEA gateway offline
+                  {% elif not has_ts %}Boat offline · no data
+                  {% elif age_s < 60 %}Boat offline · no data {{ age_s }}s
+                  {% elif age_s < 3600 %}Boat offline · no data {{ (age_s // 60) | int }}m
+                  {% else %}Boat offline · no data {{ (age_s // 3600) | int }}h
                   {% endif %}
                 secondary: >-
                   {% set ts = states('sensor.boat_last_update') %}
@@ -33,12 +44,11 @@ views:
                   {% endif %}
                 icon: mdi:sail-boat
                 icon_color: >-
-                  {% set s = states('sensor.boat_status') %}
                   {% set yd = states('binary_sensor.boat_ydwg_connected') %}
-                  {% set ts = states('sensor.boat_last_update') %}
-                  {% if s != 'online' %}red
-                  {% elif ts not in ['unavailable','unknown',''] and
-                          (now() - as_datetime(ts)).total_seconds() > 300 %}amber
+                  {% set has_ts = has_value('sensor.boat_last_update') %}
+                  {% set age_s = (now().timestamp() - as_timestamp(states('sensor.boat_last_update'), default=0)) | int %}
+                  {% set fresh = has_ts and age_s < 300 %}
+                  {% if not fresh %}red
                   {% elif yd != 'on' %}amber
                   {% else %}green
                   {% endif %}

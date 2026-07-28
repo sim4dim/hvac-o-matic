@@ -1,3 +1,5 @@
+# ⚠️ MOVED 2026-07-28 — housekeeping now owns this (housekeeping/ha-packages/rain_accumulation.yaml). Do NOT deploy this copy.
+#
 # Weekly/monthly accumulated rain. Source: AcuRite monotonic hardware counter (rain_total).
 # utility_meter accumulates from creation; calibrated to WeeWX DB totals at deploy (see notes).
 mqtt:

@@ -233,6 +233,16 @@ scp ha/dashboards/keenect.yaml hassio@<HA_IP>:/config/dashboards/
 
 Restart Home Assistant to load the packages and pyscript.
 
+**Note (2026-07-28 consolidation):** `ha/packages/`, `ha/dashboards/`, and `ha/pyscript/` in this
+repo also contain some files that are **no longer owned by hvac** — boat, weather/WeeWX,
+barometer, irrigation, and general (non-HVAC) automations moved to `housekeeping` on 2026-07-28
+per the HA-config consolidation policy (housekeeping owns all general HA config; hvac keeps only
+HVAC-specialised components — Keenect zone control, thermostats, HVAC ESPHome nodes, HVAC cost/
+runtime sensors, ventilation). Each moved file was left in place here with a `⚠️ MOVED` or
+`⚠️ SUPERSEDED` header — **do not deploy those copies.** See `ha/MOVED-TO-HOUSEKEEPING.md` for the
+full list and current housekeeping paths. This deploy section only ever covered `keenect.yaml`,
+`thermostats.yaml`, `keenect_ha.py`, and the `keenect` dashboard, all of which remain hvac's.
+
 ### 4. Install HACS components
 
 In HACS, install:

@@ -1,3 +1,5 @@
+# ⚠️ MOVED 2026-07-28 — housekeeping now owns this (housekeeping/ha-packages/irrigation.yaml). Do NOT deploy this copy.
+#
 # Irrigation Advisor — HA input helpers
 # input_text.irrigation_state is created via WS API (NOT here), same pattern as keenect_persisted_state.
 

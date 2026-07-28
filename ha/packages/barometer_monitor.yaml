@@ -1,3 +1,5 @@
+# ⚠️ MOVED 2026-07-28 — housekeeping now owns this (housekeeping/ha-packages/barometer_monitor.yaml). Do NOT deploy this copy.
+#
 # Barometric Pressure & Headache Risk Monitor
 # Place in /config/packages/barometer_monitor.yaml
 #

@@ -1,3 +1,5 @@
+# ⚠️ MOVED 2026-07-28 — housekeeping now owns this (housekeeping/ha-packages/library_outlet.yaml). Do NOT deploy this copy.
+#
 automation:
   - alias: "Library Outlet On at Sunrise"
     description: "Turn on library outlet at sunrise"

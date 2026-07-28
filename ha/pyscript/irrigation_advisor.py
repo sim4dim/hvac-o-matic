@@ -1,3 +1,5 @@
+# ⚠️ MOVED 2026-07-28 — housekeeping now owns this (housekeeping/ha/pyscript/irrigation_advisor.py). Do NOT deploy this copy.
+#
 """
 Irrigation Advisor — pyscript for Home Assistant
 ET (Hargreaves-Samani) soil-water-balance for lawn + heat-stress counter for planters.

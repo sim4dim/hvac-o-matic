@@ -1,6 +1,10 @@
+# Synced from live HA 2026-07-28. Live sha256 (2026-07-28): 8f5a66770355208376694f91c43b5c19e965784739b96d686f0da167890b784d
+# Reason: live file (2026-03-13, 1433 B) was ~80% larger than the repo copy (2026-03-11, 783 B) —
+# live had a second automation ("Master Bathroom Fan High Humidity") added directly on the HA host
+# after the repo copy was last updated, never synced back. This pull captures both automations.
 automation:
   - alias: "Master Bathroom Fan Auto-Off"
-    description: "Turn off master bathroom fan after 30 minutes or when humidity drops below 55%"
+    description: "Turn off master bathroom fan after 30 minutes"
     mode: restart
     trigger:
       - platform: state
@@ -8,9 +12,6 @@ automation:
         to: "on"
     action:
       - wait_for_trigger:
-          - platform: numeric_state
-            entity_id: sensor.master_bathroom_temperature_humidity
-            below: 55
           - platform: state
             entity_id: switch.master_bathroom_fan
             to: "off"
@@ -19,6 +20,31 @@ automation:
       - condition: state
         entity_id: switch.master_bathroom_fan
         state: "on"
+      - service: switch.turn_off
+        target:
+          entity_id: switch.master_bathroom_fan
+
+  - alias: "Master Bathroom Fan High Humidity"
+    description: "Auto-turn on fan at very high humidity (80%+), off when below 65%"
+    trigger:
+      - platform: numeric_state
+        entity_id: sensor.master_bathroom_temperature_humidity
+        above: 80
+        for: "00:02:00"
+    condition:
+      - condition: state
+        entity_id: switch.master_bathroom_fan
+        state: "off"
+    action:
+      - service: switch.turn_on
+        target:
+          entity_id: switch.master_bathroom_fan
+      - wait_for_trigger:
+          - platform: numeric_state
+            entity_id: sensor.master_bathroom_temperature_humidity
+            below: 65
+        timeout: "00:30:00"
+        continue_on_timeout: true
       - service: switch.turn_off
         target:
           entity_id: switch.master_bathroom_fan

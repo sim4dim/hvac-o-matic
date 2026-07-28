@@ -1,3 +1,5 @@
+# ⚠️ MOVED 2026-07-28 — housekeeping now owns this (housekeeping/ha-packages/boat.yaml). Do NOT deploy this copy.
+#
 # Boat MQTT sensors — individual topics (bare scalars, no JSON)
 # Topic prefix: marine/dashboard/
 # Rebuilt 2026-06-14 from live topic observation + boatnet/docs/mqtt-entries.md

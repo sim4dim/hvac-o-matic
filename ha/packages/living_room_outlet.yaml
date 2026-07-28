@@ -1,3 +1,5 @@
+# ⚠️ MOVED 2026-07-28 — housekeeping now owns this (housekeeping/ha-packages/living_room_outlet.yaml). Do NOT deploy this copy.
+#
 # NOTE: This automation is managed via HA UI (stored in automations.yaml).
 # This file is kept as reference only - do not deploy as a package.
 automation:

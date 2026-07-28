@@ -1,3 +1,7 @@
+# ⚠️ SUPERSEDED 2026-07-28 — housekeeping owns this file (housekeeping/ha-packages/weewx_sensors.yaml
+# matches live). Do NOT deploy this copy; it is pre-fix and would regress the wind-direction
+# hold-last behaviour.
+#
 # WeeWX → Home Assistant MQTT sensors
 # Source: AcuRite Iris 5-in-1 via WeeWX on Pi (192.168.1.189)
 # Topics: weather (5 min archive), weather/loop (48s loop — used here for low latency)
