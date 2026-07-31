@@ -6,6 +6,25 @@ Controls Keen smart vents via Hubitat integration (Zigbee radios on Hubitat).
 HVAC furnace controlled directly via HTTP to Flask server (bypasses Hubitat).
 First floor servo register controlled via ESPHome native API (number entity).
 
+Version: 2.6.9 — away-mode setpoint enforcement is now continuous, not just
+at startup/toggle. Confirmed live 2026-07-31: away_gene (away_cool_setpoint=
+78) let a manual setpoint change sit at 79 for 17 minutes, only silently
+snapped back by a deploy-driven pyscript.reload landing on on_startup's
+one-shot check — which also mislogged the correction as "System", sending
+the user hunting for a rogue writer. _eval_master() now calls a new
+_enforce_away_setpoints() right after the debounce gate is set (before any
+zone's demand math runs), reasserting each away zone's heat/cool setpoint
+every ~15s pass. Per-setpoint equality check keeps steady state silent (no
+write, no log line, when already correct). The reclamp write re-enters
+_eval_master() via on_setpoint_change, but that call always lands inside the
+debounce window this pass just opened, so it can only spawn a follow-up
+(task.unique-collapsed) — never recurse into the reclamp itself — and that
+follow-up finds the value already correct and no-ops. Attributed as "Away"
+in sensor.keenect_setpoint_log by stashing setpoint_user_pending[zone] before
+each write, reusing the same pending mechanism on_climate_set_temperature
+uses, instead of logging as unexplained "System". on_away_change's existing
+save/restore-on-toggle-off behavior is unchanged.
+
 Version: 2.6.8 — closes the debounce gap 2.6.7 FIX 4 left open: a debounced
 _eval_master() call (periodic_eval landed <2s earlier) was silently dropped
 with nothing to replay it, so the "immediate eval on setpoint change" fix did
@@ -1665,6 +1684,59 @@ def _eval_followup():
         log.error(f"keenect: eval follow-up crashed: {e}")
 
 
+def _enforce_away_setpoints():
+    """Continuously reclamp setpoints for any zone in away mode.
+
+    2.6.7-2.6.8 only forced away setpoints at startup (on_startup) and at the
+    away on/off transition (on_away_change). In between, nothing stopped a
+    manual setpoint change from sticking for the rest of the away period —
+    confirmed live 2026-07-31: away_gene held setpoint=79 for 17 minutes
+    (should have been 78) until an unrelated pyscript.reload happened to run
+    on_startup's one-shot check. Away mode is meant to be authoritative, so
+    this now runs every _eval_master() pass (called right after the debounce
+    gate below, before any zone is evaluated) and reasserts the away value
+    the same way on_startup already does, just on every pass instead of once.
+
+    Per-setpoint equality check (not a combined heat+cool check like
+    on_startup's) so a zone that's already correct stays silent — no write,
+    no log line — every 15s in steady state, per the "only act on a real
+    difference" requirement.
+
+    Feedback-loop note: writing input_number.<zone>_{heat,cool}_setpoint
+    fires on_setpoint_change, which calls _eval_master() immediately. That
+    re-entrant call always lands inside the debounce window this function's
+    caller just opened (debounce_until = now + 2, set before this function
+    runs), so it can't recurse into this function again — it just spawns
+    _eval_followup() (task.unique-collapsed, so a burst still yields exactly
+    one follow-up). By the time that follow-up eval runs, the write already
+    landed, so this function finds the setpoint already correct and no-ops.
+    Self-terminating, no new locking needed.
+
+    Attribution: stash "Away" into setpoint_user_pending[zone] immediately
+    before each write, reusing the same pending-attribution mechanism
+    on_climate_set_temperature uses for UI-driven changes, so on_setpoint_change
+    logs the reclamp as "Away" instead of "System" (context.user_id is None for
+    our own service call, which would otherwise resolve to "System").
+    """
+    away_heat = _float("input_number.away_heat_setpoint", 55.0)
+    away_cool = _float("input_number.away_cool_setpoint", 85.0)
+    for zn in ZONES:
+        if state.get(f"input_boolean.away_{zn}") != "on":
+            continue
+        heat_key = f"input_number.{zn}_heat_setpoint"
+        cool_key = f"input_number.{zn}_cool_setpoint"
+        cur_heat = _float(heat_key)
+        cur_cool = _float(cool_key)
+        if cur_heat is not None and cur_heat != away_heat:
+            _st["setpoint_user_pending"][zn] = ("Away", time_mod.time())
+            input_number.set_value(entity_id=heat_key, value=away_heat)
+            log.info(f"keenect: {zn} away reclamp - heat {cur_heat} -> {away_heat}")
+        if cur_cool is not None and cur_cool != away_cool:
+            _st["setpoint_user_pending"][zn] = ("Away", time_mod.time())
+            input_number.set_value(entity_id=cool_key, value=away_cool)
+            log.info(f"keenect: {zn} away reclamp - cool {cur_cool} -> {away_cool}")
+
+
 def _eval_master():
     if not _enabled():
         _update_status()
@@ -1688,6 +1760,11 @@ def _eval_master():
         task.create(_eval_followup)
         return
     _st["debounce_until"] = now + 2
+
+    # FIX (2.6.9): reclamp any away-mode zone's setpoints before evaluating
+    # demand, so this pass's Pass-1 math and the displayed setpoint agree.
+    # See _enforce_away_setpoints() docstring for the feedback-loop analysis.
+    _enforce_away_setpoints()
 
     # Pass 1: compute new zone states (no vent side effects)
     results = {}
