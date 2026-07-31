@@ -6,6 +6,18 @@ Controls Keen smart vents via Hubitat integration (Zigbee radios on Hubitat).
 HVAC furnace controlled directly via HTTP to Flask server (bypasses Hubitat).
 First floor servo register controlled via ESPHome native API (number entity).
 
+Version: 2.6.8 — closes the debounce gap 2.6.7 FIX 4 left open: a debounced
+_eval_master() call (periodic_eval landed <2s earlier) was silently dropped
+with nothing to replay it, so the "immediate eval on setpoint change" fix did
+nothing ~2s out of every 15s (measured live: 14.9s to COOLING, i.e. the old
+behavior). A debounced call now spawns _eval_followup() via task.create(),
+which waits out the remaining debounce window (re-checking, since a real eval
+running in the meantime can push debounce_until further out) and then calls
+_eval_master() once. task.unique("keenect_eval_followup") at its top collapses
+a burst of these (e.g. a slider drag) down to the single most-recently-spawned
+instance, so N rapid debounced calls still produce exactly one follow-up eval.
+No change to the debounce gate itself or its re-entrancy guarantee.
+
 Version: 2.6.7 — four fixes from a vent-traffic/staleness audit. (1) _set_vent()
 now dedupes level==0 the same as level>0, so circ-reconciliation's per-15s
 _set_vent(zn, 0) for circ-excluded zones (e.g. MBR) stops re-sending an
@@ -1616,6 +1628,43 @@ def _update_eta_sensors(results):
 # ---------------------------------------------------------------------------
 # Master evaluation
 # ---------------------------------------------------------------------------
+def _eval_followup():
+    """Replay a debounced _eval_master() call once its debounce window clears.
+
+    Spawned via task.create() from _eval_master()'s debounce-skip branch, so
+    a setpoint edit (or any other trigger) that arrives while another eval is
+    already inside its 2s debounce window still gets evaluated promptly,
+    instead of being silently dropped until the next 15s periodic_eval tick
+    (2.6.7's gap — measured live: 14.9s to COOLING instead of the intended
+    <100ms).
+
+    task.unique() collapses bursts: if several debounced calls happen close
+    together (e.g. a slider drag emitting many input_number changes in a
+    couple of seconds), each spawns its own _eval_followup() task, but the
+    first line here cancels any still-pending earlier instance, so only the
+    most-recently-spawned one survives to actually run. Net effect: N
+    debounced calls in a burst -> exactly one follow-up eval, not N.
+
+    The wait loop re-reads debounce_until each time it wakes, because a real
+    (non-debounced) _eval_master() call can run and push debounce_until
+    further out while this task is sleeping — waiting once on a stale value
+    could call into an active debounce window and get silently dropped again.
+    Once the loop exits, debounce_until is in the past, so the _eval_master()
+    call below passes the gate the normal way — same re-entrancy guarantee,
+    no concurrent execution.
+    """
+    task.unique("keenect_eval_followup")
+    try:
+        while True:
+            wait = _st["debounce_until"] - time_mod.time()
+            if wait <= 0:
+                break
+            task.sleep(wait + 0.05)
+        _eval_master()
+    except Exception as e:
+        log.error(f"keenect: eval follow-up crashed: {e}")
+
+
 def _eval_master():
     if not _enabled():
         _update_status()
@@ -1633,6 +1682,10 @@ def _eval_master():
 
     now = time_mod.time()
     if now < _st["debounce_until"]:
+        # FIX (2.6.8): a debounced call is not simply lost — spawn a
+        # follow-up that replays _eval_master() once the window clears.
+        # See _eval_followup() docstring.
+        task.create(_eval_followup)
         return
     _st["debounce_until"] = now + 2
 
@@ -2734,8 +2787,10 @@ def on_setpoint_change(**kwargs):
     await point), so this can't run concurrently with periodic_eval's 15s
     timer or any other trigger that calls _eval_master(). That same 2s
     window also debounces a rapid slider drag: intermediate values collapse
-    into the first eval, and the settled value is still picked up by the
-    very next periodic_eval at worst ~15s later.
+    into the first eval. FIX (2.6.8): if this call lands inside someone
+    else's debounce window it no longer just waits for the next periodic_eval
+    tick — _eval_master() spawns _eval_followup() to replay the eval as soon
+    as the window clears (see that function's docstring).
     """
     try:
         eid = kwargs.get("var_name", "")
