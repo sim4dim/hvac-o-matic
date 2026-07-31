@@ -6,6 +6,44 @@ Controls Keen smart vents via Hubitat integration (Zigbee radios on Hubitat).
 HVAC furnace controlled directly via HTTP to Flask server (bypasses Hubitat).
 First floor servo register controlled via ESPHome native API (number entity).
 
+Version: 2.6.7 — four fixes from a vent-traffic/staleness audit. (1) _set_vent()
+now dedupes level==0 the same as level>0, so circ-reconciliation's per-15s
+_set_vent(zn, 0) for circ-excluded zones (e.g. MBR) stops re-sending an
+already-off vent every cycle (~100 redundant Zigbee commands/24min, confirmed).
+_verify_vents()/_check_vent_health() are unaffected — both already clear/bypass
+the vent_levels cache before any corrective re-send, so drift is still
+corrected. (2) last_hvac_on_time/last_hvac_off_time (wall-clock epoch, not
+monotonic) now persist across HA restarts with bounds-checked restore
+(future/negative/>4h-old restored values are treated as unset), so
+MIN_RUN_TIME/SHORT_CYCLE_* survive a restart instead of silently resetting;
+on_startup still zeroes the restored on-time specifically when the live relay
+disagrees with persisted main_state (true on-time unknown in that case, same
+reasoning as 2.6.6). (3) _check_vent_health() no longer trusts a sensor's
+last_updated (Hubitat re-stamps a fresh last_updated on a cached, days-stale
+reading across restarts — confirmed on keen_mbr_2_pressure) or pressure alone
+— it now tracks VALUE CHANGE per sensor (persisted in
+input_text.keenect_vent_health_state) and calls a zone healthy if EITHER its
+pressure or temperature sensor changed recently. (4) Setpoint edits now call
+_eval_master() immediately from on_setpoint_change instead of waiting up to
+15s for periodic_eval, reusing _eval_master()'s own debounce_until gate for
+concurrency safety — no new locking added.
+
+Version: 2.6.6 — circ-during-min-run-hold fix, in three parts (real incident
+2026-07-31: HA restarted mid-MIN_RUN_TIME-hold, inside the ESPHome
+re-initialization window). (1) _circ_start_effects() refuses to run while
+hvac_on is True, and on_startup routes through it instead of a duplicated
+inline loop. (2) on_startup no longer blindly forces hvac_on=False from the
+persisted blob — it reconciles hvac_on/main_state against the live
+switch.hvac_controller_heat/cool first, so (1)'s guard sees the truth after a
+restart too; the heatOff/coolOff safety-sync pushes now require both a
+confirmed "off" read and persisted-state agreement, to avoid the documented
+short-cycle livelock on an ambiguous read. (3) hvac_on reconciliation still
+fails toward False on an ambiguous read (protects the push_fail_count
+auto-disable path), so it alone can't gate circulation-start; added
+_relays_confirmed_off() (requires both relays read a definite "off") and used
+it everywhere circulation actually starts. Full reasoning is in each
+function's docstring/comments.
+
 Version: 2.6.5 — NIT-1 concurrency hardening: _hvac_turn_on() now sets
 _st["hvac_on"] = True before pushing the heat/cool/fan relays (each push is an
 await point) instead of after, so a concurrent trigger (on_electricity_price_
@@ -39,6 +77,7 @@ _HARDCODED_ZONES = {
         "vents": ["light.keen_ben"],
         "vent_type": "light",
         "health_sensors": ["sensor.keen_ben_pressure"],
+        "health_sensors_temp": ["sensor.keen_ben_temperature"],
         "heat_min_vo": 15, "heat_max_vo": 100,
         "cool_min_vo": 15, "cool_max_vo": 100,
         "fan_vo": 30,
@@ -50,6 +89,7 @@ _HARDCODED_ZONES = {
         "vents": ["light.keen_gene"],
         "vent_type": "light",
         "health_sensors": ["sensor.keen_gene_pressure"],
+        "health_sensors_temp": ["sensor.keen_gene_temperature"],
         "heat_min_vo": 15, "heat_max_vo": 100,
         "cool_min_vo": 15, "cool_max_vo": 100,
         "fan_vo": 30,
@@ -61,6 +101,7 @@ _HARDCODED_ZONES = {
         "vents": ["light.keen_mbr_1", "light.keen_mbr_2"],
         "vent_type": "light",
         "health_sensors": ["sensor.keen_mbr_1_pressure", "sensor.keen_mbr_2_pressure"],
+        "health_sensors_temp": ["sensor.keen_mbr_1_temperature", "sensor.keen_mbr_2_temperature"],
         "heat_min_vo": 15, "heat_max_vo": 100,
         "cool_min_vo": 15, "cool_max_vo": 100,
         "fan_vo": 30,
@@ -72,6 +113,7 @@ _HARDCODED_ZONES = {
         "vents": ["number.hvac_1st_floor_register_servo_angle"],
         "vent_type": "number",
         "health_sensors": [],
+        "health_sensors_temp": [],
         "heat_min_vo": 7, "heat_max_vo": 45,  # servo: 7°≈15% of 45° max
         "cool_min_vo": 7, "cool_max_vo": 45,
         "fan_vo": 15,  # ~33% of 45
@@ -197,13 +239,20 @@ def _load_zone_config():
             continue
 
         # Auto-discover health sensors by convention: light.keen_X -> sensor.keen_X_pressure
+        # / sensor.keen_X_temperature. Both are used for liveness (see
+        # _check_vent_health) — pressure alone was found to under-report
+        # freshness since both are timer-driven, continuously-drifting signals.
         health_sensors = []
+        health_sensors_temp = []
         for v in vents:
             if vent_type == "light":
                 vent_suffix = v.replace("light.", "")
                 health_entity = f"sensor.{vent_suffix}_pressure"
                 if health_entity in all_sensor_names:
                     health_sensors.append(health_entity)
+                temp_entity = f"sensor.{vent_suffix}_temperature"
+                if temp_entity in all_sensor_names:
+                    health_sensors_temp.append(temp_entity)
 
         heat_min = int(float(state.get(f"input_number.{pfx}_heat_min_vo") or 15))
         heat_max = int(float(state.get(f"input_number.{pfx}_heat_max_vo") or 100))
@@ -219,6 +268,7 @@ def _load_zone_config():
             "vents": vents,
             "vent_type": vent_type,
             "health_sensors": health_sensors,
+            "health_sensors_temp": health_sensors_temp,
             "heat_min_vo": heat_min,
             "heat_max_vo": heat_max,
             "cool_min_vo": cool_min,
@@ -254,6 +304,7 @@ def _load_zone_config():
 def _build_derived_maps():
     """Build setpoint map, zone codes, trigger entity lists from loaded config."""
     global _SETPOINT_MAP, _ZONE_TO_CODE, _CODE_TO_ZONE
+    global _HEALTH_SENSOR_CODE, _HEALTH_CODE_SENSOR
     _SETPOINT_MAP = {}
     for zn in ZONES:
         _SETPOINT_MAP[f"input_number.{zn}_heat_setpoint"] = (zn, "heat")
@@ -275,6 +326,23 @@ def _build_derived_maps():
         used.add(code)
         _ZONE_TO_CODE[display] = code
         _CODE_TO_ZONE[code] = display
+
+    # Vent-health liveness codes (FIX 3): <zone_code><vent_index><p|t>, e.g.
+    # "m2t" = mbr's 2nd vent's temperature sensor. Built from the live ZONES
+    # config so it works whether zones come from HA helpers or the hardcoded
+    # fallback, rather than hardcoding sensor entity ids here.
+    _HEALTH_SENSOR_CODE = {}
+    _HEALTH_CODE_SENSOR = {}
+    for zn, zone in ZONES.items():
+        zcode = _ZONE_TO_CODE.get(zn.replace("_", " ").title(), zn[0])
+        for i, sid in enumerate(zone.get("health_sensors", [])):
+            code = f"{zcode}{i + 1}p"
+            _HEALTH_SENSOR_CODE[sid] = code
+            _HEALTH_CODE_SENSOR[code] = sid
+        for i, sid in enumerate(zone.get("health_sensors_temp", [])):
+            code = f"{zcode}{i + 1}t"
+            _HEALTH_SENSOR_CODE[sid] = code
+            _HEALTH_CODE_SENSOR[code] = sid
 
 
 def _persist_zone_config():
@@ -404,11 +472,31 @@ _SETPOINT_MAP = {
 _SETPOINT_LOG_MAX = 20
 STATE_ENTITY = "input_text.keenect_persisted_state"
 SETPOINT_LOG_ENTITY = "input_text.keenect_setpoint_log_data"
+# Dedicated entity for vent-health liveness tracking (FIX 3) — kept separate
+# from STATE_ENTITY, which was observed at 233/255 chars live with almost no
+# headroom left. NOTE: like STATE_ENTITY/SETPOINT_LOG_ENTITY, this input_text
+# helper is created via the HA WS API at deploy time, not via package YAML
+# (see ha/packages/irrigation.yaml's comment on the same pattern) — it must
+# exist (input_text, max: 255) before this will actually persist; until then
+# _save_vent_health_state() fails silently (debug log only) and liveness
+# tracking just restarts fresh each reload, same as before this fix.
+VENT_HEALTH_ENTITY = "input_text.keenect_vent_health_state"
 
 # Zone name <-> compact code for setpoint log persistence (255 char limit)
 # Populated dynamically by _build_derived_maps() at startup; static values are fallback
 _ZONE_TO_CODE = {"Ben": "b", "Gene": "g", "Mbr": "m", "First Floor": "f"}
 _CODE_TO_ZONE = {"b": "Ben", "g": "Gene", "m": "Mbr", "f": "First Floor"}
+
+# Sensor entity id <-> compact code for vent-health liveness persistence.
+# Populated dynamically by _build_derived_maps() at startup; static values
+# are fallback (matches the hardcoded ZONES fallback sensor ids).
+_HEALTH_SENSOR_CODE = {
+    "sensor.keen_ben_pressure": "b1p", "sensor.keen_ben_temperature": "b1t",
+    "sensor.keen_gene_pressure": "g1p", "sensor.keen_gene_temperature": "g1t",
+    "sensor.keen_mbr_1_pressure": "m1p", "sensor.keen_mbr_1_temperature": "m1t",
+    "sensor.keen_mbr_2_pressure": "m2p", "sensor.keen_mbr_2_temperature": "m2t",
+}
+_HEALTH_CODE_SENSOR = {v: k for k, v in _HEALTH_SENSOR_CODE.items()}
 
 # Vent health check - if pressure sensor hasn't reported in this many seconds,
 # the vent is likely offline. Pressure reports every ~5 min, so 30 min = very stale.
@@ -419,7 +507,14 @@ _PERSIST_KEYS = [
     "main_state", "hvac_on", "recirc_active", "zone_states",
     "hvac_off_time", "vents_closed_after_off",
     "sensor_fail_parked", "all_none_count",
+    "last_hvac_on_time", "last_hvac_off_time",
 ]
+
+# Sanity bound for restoring last_hvac_on_time/last_hvac_off_time (both
+# wall-clock epoch via time.time(), NOT monotonic — see _load_state()). A
+# restored timestamp older than this is treated as expired/unset rather than
+# arming a stale MIN_RUN_TIME/SHORT_CYCLE guard.
+_RESTORED_TS_MAX_AGE = 4 * 3600  # 4 hours
 
 # ---------------------------------------------------------------------------
 # Module-level state
@@ -464,6 +559,8 @@ _st = {
     # Setpoint attribution: zone -> (user_name, timestamp) captured from climate.set_temperature
     # so the follow-on input_number change can be attributed to the real user.
     "setpoint_user_pending": {},
+    # Vent-health liveness (FIX 3): sensor_id -> (rounded_value, wallclock_when_last_changed)
+    "sensor_liveness": {},
 }
 
 
@@ -492,11 +589,18 @@ def _save_state():
         "ho": 1 if _st["hvac_on"] else 0,
         "ra": 1 if _st["recirc_active"] else 0,
         "zs": {k: v[:1] for k, v in _st["zone_states"].items()},  # I/H/C/F
-        "ot": _st["hvac_off_time"],
+        # FIX 2 (2.6.7): rounded to int seconds — this is a 120-300s delay
+        # timer, sub-second precision was never needed and this recovers a
+        # few chars of the now-tighter 255-char budget (see "lon"/"lof" below).
+        "ot": int(_st["hvac_off_time"]) if _st["hvac_off_time"] is not None else None,
         "vc": 1 if _st["vents_closed_after_off"] else 0,
         "sv": sv,
         "sfp": 1 if _st.get("sensor_fail_parked") else 0,  # L8: sensor_fail_parked
         "anc": _st.get("all_none_count", 0),               # L8: all_none_count
+        # FIX 2 (2.6.7): short-cycle/min-run timestamps, integer epoch seconds
+        # (sub-second precision isn't needed against 120-300s thresholds).
+        "lon": int(_st.get("last_hvac_on_time", 0) or 0),
+        "lof": int(_st.get("last_hvac_off_time", 0) or 0),
     }
     # P7: Include cost tracking counters (heating/cooling runs and cycles)
     cost_keys = {
@@ -553,6 +657,29 @@ def _load_state():
         # L8: Restore safety flags
         _st["sensor_fail_parked"] = bool(data.get("sfp", 0))
         _st["all_none_count"] = int(data.get("anc", 0))
+        # FIX 2 (2.6.7): Restore short-cycle/min-run timestamps. Both are
+        # wall-clock epoch via time.time() (NOT time.monotonic(), which would
+        # be garbage after a restart) so restoring the raw value is valid —
+        # but bound defensively: a restored timestamp that is in the future,
+        # negative, or older than _RESTORED_TS_MAX_AGE is treated as
+        # expired/unset (0). A wrongly-"recent" last_hvac_on_time would BLOCK
+        # a needed shutoff (MIN_RUN_TIME), which is worse than the bug being
+        # fixed, so anything implausible fails toward 0 (no guard armed).
+        now_restore = time_mod.time()
+        for src_key, dst_key in (("lon", "last_hvac_on_time"), ("lof", "last_hvac_off_time")):
+            raw_ts = data.get(src_key, 0)
+            try:
+                ts = float(raw_ts)
+            except (TypeError, ValueError):
+                ts = 0
+            if ts <= 0 or ts > now_restore + 60 or (now_restore - ts) > _RESTORED_TS_MAX_AGE:
+                if ts:
+                    log.warning(
+                        f"keenect: discarding implausible restored {dst_key}={ts} "
+                        f"(now={now_restore:.0f}) — treating as unset"
+                    )
+                ts = 0
+            _st[dst_key] = ts
         # P7: Restore cost tracking counters
         _st["heat_runtime"] = data.get("hr", 0.0)
         _st["heat_cost"] = data.get("hc", 0.0)
@@ -1043,7 +1170,16 @@ def _set_vent(zone_name, level):
     for vent_id in zone["vents"]:
         key = f"{zone_name}:{vent_id}"
         current = _st["vent_levels"].get(key, -99)
+        # Dedupe both directions: skip a re-send when already within tolerance
+        # of a nonzero target, OR already exactly closed. current defaults to
+        # -99 when unknown, so a first-ever call still sends either way.
+        # _verify_vents()/_check_vent_health() correct real drift despite this
+        # cache: _verify_vents() deletes the cache entry before re-calling
+        # _set_vent(), and _check_vent_health() re-sends via light.turn_on/off
+        # directly, bypassing _set_vent() (and this cache) entirely.
         if level > 0 and abs(current - level) <= 4:
+            continue
+        if level == 0 and current == 0:
             continue
 
         try:
@@ -1633,10 +1769,17 @@ def _eval_master():
             _close_all_vents()
             _st["sensor_fail_parked"] = False
             _st["vents_closed_after_off"] = True
-        elif (not _st["hvac_on"] and not _st["recirc_active"] and _circ_enabled()):
+        elif (not _st["hvac_on"] and not _st["recirc_active"] and _circ_enabled()
+              and _relays_confirmed_off()):
             # Circ reconciliation: ensure non-excluded zones are at fan_vo, excluded at 0,
             # while circulation is active and the system is idle. Self-heals the case where
             # circ was enabled during an HVAC run (deferred) and HVAC then ended.
+            # _relays_confirmed_off() (not just hvac_on) gates this: right after a HA
+            # restart hvac_on can be False merely because the ESPHome switches hadn't
+            # reported in yet when startup reconciled it (see on_startup), not because
+            # the relay is actually off. This elif runs every 15s via periodic_eval, so
+            # once the switches report a definite "off" the very next pass opens
+            # circulation normally — no separate re-check mechanism needed.
             for zn, zone in ZONES.items():
                 if _zone_circ_excluded(zn):
                     _set_vent(zn, 0)
@@ -1822,44 +1965,150 @@ def _update_status():
 # ---------------------------------------------------------------------------
 # Vent health check
 # ---------------------------------------------------------------------------
+def _round_health_value(sensor_id, raw_value):
+    """Round a health-sensor reading for compact storage and change-detection.
+    Pressure readings are large (~98000+, mislabeled 'mbar' but actually Pa)
+    — integer resolution is plenty. Temperature needs one decimal."""
+    if sensor_id.endswith("_pressure"):
+        return round(raw_value)
+    return round(raw_value, 1)
+
+
+def _sensor_liveness_age(sensor_id, raw_value, now_ts):
+    """Track (rounded_value, wallclock_when_last_changed) per sensor in
+    _st["sensor_liveness"] (persisted — see _save_vent_health_state /
+    _restore_vent_health_state). Returns seconds since the value last
+    actually changed — 0.0 the first time a sensor is seen or whenever it
+    changes.
+
+    This replaces trusting the entity's `last_updated` attribute, which the
+    Hubitat integration re-stamps to "now" on every HA restart even when the
+    underlying value is a cached, days-stale reading (confirmed 2026-07-31:
+    sensor.keen_mbr_2_pressure showed last_updated=17:51:47Z carrying the
+    identical 07-27 value 97570.5, with no recorder history row since
+    07-27 — a 4-day-old fault reported as "stale 38m"). Tracking VALUE
+    CHANGE is immune to that: a restart re-stamping an unchanged value does
+    not reset the age. This is sound specifically because both pressure and
+    temperature drift continuously on a live sensor (verified: pressure
+    ~10min cadence, temperature ~5min) — a value that truly never changes
+    is itself the correct signal of a dead sensor, not a false positive.
+    """
+    rounded = _round_health_value(sensor_id, raw_value)
+    liveness = _st.setdefault("sensor_liveness", {})
+    entry = liveness.get(sensor_id)
+    if entry is None or entry[0] != rounded:
+        liveness[sensor_id] = (rounded, now_ts)
+        return 0.0
+    return now_ts - entry[1]
+
+
+def _save_vent_health_state():
+    """Persist per-sensor liveness to a dedicated input_text (VENT_HEALTH_ENTITY),
+    kept separate from STATE_ENTITY which has almost no headroom left (233/255
+    chars observed live). Compact "<code>:<value>:<ts>" triples, semicolon-
+    delimited, truncated from the end if over the 255-char hard cap — losing
+    the least-recently-updated entries is an acceptable degrade (they just
+    re-learn freshness from the next couple of live readings)."""
+    liveness = _st.get("sensor_liveness", {})
+    parts = []
+    for sensor_id, (val, ts) in liveness.items():
+        code = _HEALTH_SENSOR_CODE.get(sensor_id)
+        if not code:
+            continue
+        parts.append(f"{code}:{val}:{int(ts)}")
+    val_str = ";".join(parts)
+    while len(val_str) > 255 and ";" in val_str:
+        val_str = val_str[:val_str.rfind(";")]
+    try:
+        input_text.set_value(entity_id=VENT_HEALTH_ENTITY, value=val_str if val_str else " ")
+    except Exception as e:
+        # Debug, not error/warning: this input_text helper must be created via
+        # the HA WS API before it exists (see VENT_HEALTH_ENTITY comment) —
+        # until then this is expected to fail every call.
+        log.debug(f"keenect: failed to save vent health state (helper may not exist yet): {e}")
+
+
+def _restore_vent_health_state():
+    """Restore per-sensor liveness tracking after a restart (survives pyscript
+    reload too, since it's read fresh from the input_text each time)."""
+    try:
+        raw = state.get(VENT_HEALTH_ENTITY)
+        if raw in (None, "", " ", "unknown", "unavailable"):
+            return
+        liveness = {}
+        for part in raw.split(";"):
+            fields = part.split(":")
+            if len(fields) != 3:
+                continue
+            code, val, ts = fields
+            sensor_id = _HEALTH_CODE_SENSOR.get(code)
+            if not sensor_id:
+                continue
+            try:
+                liveness[sensor_id] = (float(val), float(ts))
+            except ValueError:
+                continue
+        if liveness:
+            _st["sensor_liveness"] = liveness
+            log.info(f"keenect: restored vent-health liveness for {len(liveness)} sensors")
+    except Exception as e:
+        log.warning(f"keenect: failed to restore vent health state: {e}")
+
+
 def _check_vent_health():
-    """Detect stale Keen vents and re-send last commanded position."""
+    """Detect stale Keen vents and re-send last commanded position.
+
+    A vent is healthy if EITHER its pressure or its temperature sensor has
+    changed recently (see _sensor_liveness_age) — first_floor's servo has no
+    health_sensors/health_sensors_temp and is exempt, same as before."""
     if not _enabled():
         return
 
-    utc_now = dt_mod.datetime.now(dt_mod.timezone.utc)
-    stale_vents = []
+    now_ts = time_mod.time()
+    stale_vents = []  # (zone, vent_id, worst_sensor_id, reason)
 
     for zn, zone in ZONES.items():
-        health_sensors = zone.get("health_sensors", [])
-        if not health_sensors:
+        pressure_sensors = zone.get("health_sensors", [])
+        temp_sensors = zone.get("health_sensors_temp", [])
+        if not pressure_sensors and not temp_sensors:
             continue
 
-        for i, sensor_id in enumerate(health_sensors):
+        n = max(len(pressure_sensors), len(temp_sensors))
+        for i in range(n):
             vent_id = zone["vents"][min(i, len(zone["vents"]) - 1)]
-            try:
-                s = state.get(sensor_id)
+            p_sensor = pressure_sensors[i] if i < len(pressure_sensors) else None
+            t_sensor = temp_sensors[i] if i < len(temp_sensors) else None
 
-                # Check if outright unavailable
-                if s in ("unavailable", "unknown", None):
-                    stale_vents.append((zn, vent_id, sensor_id, "unavailable"))
+            readings = []  # (sensor_id, age_seconds_or_None, unavailable)
+            for sensor_id in (p_sensor, t_sensor):
+                if sensor_id is None:
                     continue
+                try:
+                    s = state.get(sensor_id)
+                    if s in ("unavailable", "unknown", None):
+                        readings.append((sensor_id, None, True))
+                        continue
+                    val = float(s)
+                    age = _sensor_liveness_age(sensor_id, val, now_ts)
+                    readings.append((sensor_id, age, False))
+                except Exception as e:
+                    log.debug(f"keenect: health check error {sensor_id}: {e}")
 
-                # Check staleness via last_updated timestamp
-                last_updated = state.get(f"{sensor_id}.last_updated")
-                if last_updated is None:
-                    attrs = state.getattr(sensor_id)
-                    last_updated = attrs.get("last_updated") if attrs else None
-                if last_updated is None:
-                    continue
+            if not readings:
+                continue  # both reads errored this pass — try again next time
 
-                dt = dt_mod.datetime.fromisoformat(str(last_updated))
-                age = (utc_now - dt).total_seconds()
-                if age > VENT_STALE_SECONDS:
-                    stale_vents.append((zn, vent_id, sensor_id,
-                                       f"stale {int(age / 60)}m"))
-            except Exception as e:
-                log.debug(f"keenect: health check error {sensor_id}: {e}")
+            available = [(sid, age) for sid, age, unavail in readings if not unavail]
+            fresh = any([age <= VENT_STALE_SECONDS for _, age in available])
+            if fresh:
+                continue
+
+            if available:
+                worst_sensor, worst_age = max(available, key=lambda t: t[1])
+                reason = f"stale {int(worst_age / 60)}m"
+            else:
+                worst_sensor = readings[0][0]
+                reason = "unavailable"
+            stale_vents.append((zn, vent_id, worst_sensor, reason))
 
     if not stale_vents:
         # Clear notification if vents recovered
@@ -1887,8 +2136,11 @@ def _check_vent_health():
             except Exception as e:
                 log.error(f"keenect: re-send to {vent_id} failed: {e}")
 
-    # Persistent notification in HA
-    vent_list = ", ".join([f"{vid} ({reason})" for _, vid, _, reason in stale_vents])
+    # Persistent notification in HA — names the actually-stale sensor, not
+    # just the vent, and reports the true (value-change-based) age.
+    vent_list = ", ".join(
+        [f"{vid} [{sid}] ({reason})" for _, vid, sid, reason in stale_vents]
+    )
     try:
         persistent_notification.create(
             title="Keenect: Stale Vent Detected",
@@ -1931,29 +2183,101 @@ def on_startup():
         # Keep zone_states from persisted state! Clearing them breaks stateful hysteresis:
         # zones in the deadband (at setpoint) would all evaluate as IDLE and close vents
         # even while the furnace is still running.
-        was_on = _st["hvac_on"]
-        was_main_state = _st["main_state"]  # capture before reset
-        _st["hvac_on"] = False
-        _st["main_state"] = "IDLE"
+        was_main_state = _st["main_state"]  # persisted belief, for logging only
+
+        # P9: Reconcile hvac_on/main_state against the ESPHome relays directly instead
+        # of trusting the persisted blob. The persisted "hvac_on"/"main_state" reflect
+        # software belief from before the restart, and a restart can land squarely
+        # inside the MIN_RUN_TIME hold in _hvac_turn_off() — that guard returns before
+        # touching hvac_on/main_state, so both can still say "actively cooling/heating"
+        # (correctly) while HA is down. The relays themselves survive the restart
+        # untouched, so they're the only source that tracks reality at this point.
+        # Real incident (2026-07-31): cool relay physically ON, demand already zero,
+        # restart mid-hold — blindly forcing hvac_on=False here let the circulation
+        # reconciliation below treat the system as idle and open every zone's vent
+        # while the compressor was still running.
+        # state.get() can raise on an entity that has never been registered
+        # (confirmed elsewhere in this file, e.g. _float()'s try/except) — these
+        # two ESPHome switches always exist once the integration is set up, and
+        # _hvac_push()/_eval_master()'s bypass check already call state.get() on
+        # them unwrapped, constantly, without issue. Still, wrap defensively
+        # here: any exception degrades to "unknown", the same as unavailable.
+        try:
+            heat_state = state.get("switch.hvac_controller_heat")
+        except Exception as e:
+            heat_state = None
+            log.warning(f"keenect: startup - heat relay state read failed, treating as unknown: {e}")
+        try:
+            cool_state = state.get("switch.hvac_controller_cool")
+        except Exception as e:
+            cool_state = None
+            log.warning(f"keenect: startup - cool relay state read failed, treating as unknown: {e}")
+        heat_relay_on = heat_state == "on"
+        cool_relay_on = cool_state == "on"
+        if heat_relay_on or cool_relay_on:
+            _st["hvac_on"] = True
+            reconciled_state = "COOLING" if cool_relay_on else "HEATING"
+            _st["main_state"] = reconciled_state
+            # FIX 2 (2.6.7): last_hvac_on_time now survives restarts via
+            # _load_state() (bounds-checked there) instead of always being 0
+            # here, so MIN_RUN_TIME can span a restart when the persisted
+            # state actually describes THIS run. But when the live relay
+            # DISAGREES with the persisted main_state (was_main_state, read
+            # before this block ran), the persisted last_hvac_on_time
+            # describes whatever run main_state THOUGHT was happening — not
+            # necessarily this one — so its true age is unknown. Same
+            # reasoning 2.6.6 already used to justify leaving it at 0
+            # unconditionally: arming a guard off an unverifiable timestamp
+            # would recreate the exact window that fix closed (relay on,
+            # guard blocking, circulation suppressed indefinitely). Zero it
+            # in that case only — 0 disarms MIN_RUN_TIME, which fails toward
+            # allowing the next eval to shut the relay off, never toward
+            # blocking a shutoff demand already calls for.
+            if was_main_state != reconciled_state:
+                discarded = _st.get("last_hvac_on_time", 0)
+                _st["last_hvac_on_time"] = 0
+                log.warning(
+                    f"keenect: startup - main_state mismatch (persisted={was_main_state} "
+                    f"reconciled={reconciled_state}), discarding restored "
+                    f"last_hvac_on_time={discarded:.0f} — true on-time unknown"
+                )
+            log.warning(
+                f"keenect: startup - relay physically ON (heat={heat_relay_on} "
+                f"cool={cool_relay_on}) despite persisted main_state={was_main_state}, "
+                f"reconciling hvac_on=True so circulation stays suppressed until eval "
+                f"turns the relay off (last_hvac_on_time={_st['last_hvac_on_time']:.0f})"
+            )
+        else:
+            _st["hvac_on"] = False
+            _st["main_state"] = "IDLE"
+        was_on = _st["hvac_on"]  # reconciled value — drives the Zigbee-wait gate below
         _st["warmup_start"] = None
         _st["vent_levels"] = {}  # force vent re-sends
 
         # P6: Hardware safety sync — ensure the furnace is off before startup logic runs.
-        # Skip the off-command for whichever mode was already active.  Sending heatOff
-        # when the system was heating (or coolOff when it was cooling) fires on_turn_off
-        # on the ESP32 with the relay physically ON, which stamps *_last_off = millis().
-        # The short-cycle guard then blocks the next eval-driven turn-on for 120/300 s,
-        # and keenect's 60 s heartbeat re-blocks it every retry — permanent livelock.
-        # eval_master() re-arms the correct relay at the end of startup, so it is safe
-        # to leave the active relay running for the few seconds startup takes.
+        # Skip the off-command unless BOTH: (a) the relay reads a definite "off" —
+        # not "on", and not unavailable/unknown, and (b) the persisted main_state
+        # doesn't itself claim that mode was active. Sending heatOff when heat is
+        # physically on (or coolOff when cool is) fires on_turn_off on the ESP32 with
+        # the relay still ON, which stamps *_last_off = millis(). The short-cycle
+        # guard then blocks the next eval-driven turn-on for 120/300 s, and keenect's
+        # 60 s heartbeat re-blocks it every retry — permanent livelock (this project
+        # has lived that exact incident: 33h with no cooling, survived an ESP32
+        # restart). An unavailable/unknown read is the likely case right after a
+        # restart (same ESPHome re-initialization window as the rest of this fix),
+        # so it must fail toward NOT pushing, same as a confirmed "on" read — union
+        # of both conditions required (a) and (b), not just (a). Skipping a push to
+        # an already-off relay costs nothing: eval_master() re-arms/re-clears the
+        # correct relay at the end of startup regardless.
         log.info(
             "keenect: startup - hardware safety sync "
-            f"(was_on={was_on} was_main_state={was_main_state})"
+            f"(was_on={was_on} was_main_state={was_main_state} "
+            f"heat_state={heat_state} cool_state={cool_state})"
         )
-        if was_main_state != "HEATING":
-            _hvac_push(3)  # heatOff — safe; heat was not running
-        if was_main_state != "COOLING":
-            _hvac_push(5)  # coolOff — safe; cool was not running
+        if heat_state == "off" and was_main_state != "HEATING":
+            _hvac_push(3)  # heatOff — confirmed off, and persisted state agrees
+        if cool_state == "off" and was_main_state != "COOLING":
+            _hvac_push(5)  # coolOff — confirmed off, and persisted state agrees
         if not _circ_enabled():
             _hvac_push(7)  # fanOff
         safety_synced = True
@@ -1962,6 +2286,7 @@ def on_startup():
             log.info("keenect: startup - was_on=True, will re-arm via eval")
         log.info(f"keenect: startup - restored zone_states={_st['zone_states']}")
         _restore_setpoint_log()
+        _restore_vent_health_state()
         _update_status()
         _update_setpoint_log_sensor()
         _update_cost_sensors()  # publish initial sensor values
@@ -2022,13 +2347,15 @@ def on_startup():
                     log.info("keenect: startup - all idle, closing all vents")
                     _close_all_vents()
             # If continuous circulation is active, open vents and fan
-            # (state_trigger won't fire since boolean was already on before reload)
+            # (state_trigger won't fire since boolean was already on before reload).
+            # Routed through _circ_start_effects() (rather than the old inline
+            # loop) so its hvac_on guard applies here too — this call site used
+            # to open circulation vents unconditionally, even if hvac_on was
+            # still True (e.g. reload during an active run or a MIN_RUN_TIME
+            # hold), which is exactly the bug this guard exists to prevent.
             if _circ_enabled():
-                log.info("keenect: startup - circulation active, opening vents + fan")
-                for zn, zone in ZONES.items():
-                    if not _zone_circ_excluded(zn):
-                        _set_vent(zn, zone.get("fan_vo", 30))
-                _hvac_push(6)  # fanOn
+                log.info("keenect: startup - circulation active, reconciling vents + fan")
+                _circ_start_effects()
             _check_consistency()
     except Exception as e:
         log.error(f"keenect: on_startup crashed: {e}")
@@ -2210,13 +2537,66 @@ def on_enable_change(**kwargs):
         log.error(f"keenect: on_enable_change crashed: {e}")
 
 
+def _relays_confirmed_off():
+    """True only when BOTH heat and cool relay switches report a definite
+    "off" — not "on", and not unavailable/unknown/None.
+
+    Deliberately a separate, stricter check from the hvac_on reconciliation in
+    on_startup (which treats an unavailable read as "not on", i.e. fails
+    toward False — that direction protects against auto-disabling keenect via
+    push_fail_count on an ordinary cold boot, and must not change). Starting
+    circulation is a comfort/efficiency action with no safety role, so it can
+    afford to wait: this fails the OTHER direction, toward NOT starting until
+    the relays are positively confirmed idle, rather than assuming idle just
+    because hvac_on says so. That matters right after a HA restart, when the
+    ESPHome switches can still read unavailable/unknown for the first several
+    seconds while entities re-initialize — exactly the window the real
+    2026-07-31 incident's restart landed in.
+    """
+    # state.get() raises on an entity that was never registered — not the case
+    # here (see on_startup) — but degrade to "not confirmed off" rather than
+    # propagate, matching this function's own fail-toward-not-starting stance.
+    try:
+        heat_state = state.get("switch.hvac_controller_heat")
+    except Exception:
+        heat_state = None
+    try:
+        cool_state = state.get("switch.hvac_controller_cool")
+    except Exception:
+        cool_state = None
+    return heat_state == "off" and cool_state == "off"
+
+
 def _circ_start_effects():
     """Open non-excluded zone vents to fan position and turn the blower on.
 
-    Shared by on_circ_change (enable_circulation -> on) and
-    on_electricity_price_change (on-peak window ends while circulation should
-    be running) so the two triggers can't drift apart.
+    Shared by on_circ_change (enable_circulation -> on), on_electricity_price_
+    change (on-peak window ends while circulation should be running), and
+    on_startup (continuous circulation already on before a reload) so all
+    callers can't drift apart.
+
+    Refuses to run while _st["hvac_on"] is True. This is the same flag
+    _hvac_turn_off()/_hvac_turn_on() flip only around successful relay
+    pushes, so it tracks the actual heat/cool relay, not just computed zone
+    demand. Critically, it stays True through the MIN_RUN_TIME hold in
+    _hvac_turn_off() (the guard returns before touching it) — the compressor
+    or heat relay is still physically energized during that hold even though
+    demand has already dropped to zero. Circulation must never open zone
+    vents while the relay is still actively conditioning; once
+    _hvac_turn_off() actually completes, hvac_on flips False and the next
+    eval/trigger runs this normally (self-healing, no deadlock).
+
+    Also refuses to run unless _relays_confirmed_off() — see that function's
+    docstring. hvac_on alone isn't enough right after a restart: on_startup
+    can reconcile hvac_on=False purely because the ESPHome switches hadn't
+    reported in yet, not because the relay is actually off.
     """
+    if _st["hvac_on"]:
+        log.info("keenect: circulation start skipped — HVAC relay still active")
+        return
+    if not _relays_confirmed_off():
+        log.info("keenect: circulation start skipped — relay state not yet confirmed off")
+        return
     for zn, zone in ZONES.items():
         if not _zone_circ_excluded(zn):
             _set_vent(zn, zone.get("fan_vo", 30))
@@ -2345,12 +2725,24 @@ def on_circ_optout_change(**kwargs):
     "input_number.first_floor_heat_setpoint", "input_number.first_floor_cool_setpoint",
 )
 def on_setpoint_change(**kwargs):
-    """Track who changed a thermostat setpoint."""
+    """Track who changed a thermostat setpoint, and react immediately instead
+    of waiting up to 15s for periodic_eval.
+
+    FIX 4 (2.6.7): calls _eval_master() directly. Concurrency safety is
+    reused, not reinvented — _eval_master() already gates itself with its
+    own debounce_until re-entrancy check (set synchronously, before any
+    await point), so this can't run concurrently with periodic_eval's 15s
+    timer or any other trigger that calls _eval_master(). That same 2s
+    window also debounces a rapid slider drag: intermediate values collapse
+    into the first eval, and the settled value is still picked up by the
+    very next periodic_eval at worst ~15s later.
+    """
     try:
         eid = kwargs.get("var_name", "")
         mapping = _SETPOINT_MAP.get(eid)
         if not mapping:
             return
+        _eval_master()
         zone, sp_type = mapping
         old_val = kwargs.get("old_value")
         new_val = kwargs.get("value")
@@ -2481,6 +2873,7 @@ def periodic_vent_health():
     """Check vent health every 10 minutes."""
     try:
         _check_vent_health()
+        _save_vent_health_state()
     except Exception as e:
         log.error(f"keenect: periodic_vent_health crashed: {e}")
 
