@@ -6,6 +6,32 @@ Controls Keen smart vents via Hubitat integration (Zigbee radios on Hubitat).
 HVAC furnace controlled directly via HTTP to Flask server (bypasses Hubitat).
 First floor servo register controlled via ESPHome native API (number entity).
 
+Version: 2.6.10 — two Away-mode fixes. FIX A: 2.6.9's "Away" attribution in
+sensor.keenect_setpoint_log was racy — confirmed live 2026-07-31 17:21, a
+manual setpoint change got logged as "Away" and the reclamp that immediately
+corrected it got logged as "System" (inverted). Root cause: on_setpoint_change
+calls _eval_master() (which ran _enforce_away_setpoints()) BEFORE resolving
+its own attribution, and _enforce_away_setpoints() was stashing "Away" into
+the SAME setpoint_user_pending[zone] slot on_climate_set_temperature uses for
+real users — clobbering the real user's stash before the outer call could
+read it, then the inner reclamp's own on_setpoint_change call found the slot
+already emptied by the outer call and fell back to "System". Fixed by making
+_enforce_away_setpoints() stop touching setpoint_user_pending entirely;
+on_setpoint_change now resolves the real user first (untouched pending
+mechanism), and only relabels a still-"System" result as "Away" when the zone
+is currently in away mode AND the new value exactly equals the away setpoint
+for that heat/cool attribute — deterministic, no shared timing-sensitive
+slot. on_away_change's away→off restore writes get an analogous "Away off"
+label via the pending stash (safe there since the zone's away boolean is
+already off by the time those writes land, so _enforce_away_setpoints can't
+clobber it). FIX B: _st["saved_setpoints"] (pre-away setpoints) was in-memory
+only, so an HA restart mid-away-mode lost the true pre-away values and a
+later away-off restored ZONE_DEFAULTS instead. Now persisted to its own
+input_text.keenect_saved_setpoints (mirrors VENT_HEALTH_ENTITY's dedicated-
+helper pattern exactly — STATE_ENTITY has no headroom left), saved whenever
+saved_setpoints changes and restored at startup into memory only (applied
+solely at the away→off transition, same as before).
+
 Version: 2.6.9 — away-mode setpoint enforcement is now continuous, not just
 at startup/toggle. Confirmed live 2026-07-31: away_gene (away_cool_setpoint=
 78) let a manual setpoint change sit at 79 for 17 minutes, only silently
@@ -512,6 +538,16 @@ SETPOINT_LOG_ENTITY = "input_text.keenect_setpoint_log_data"
 # _save_vent_health_state() fails silently (debug log only) and liveness
 # tracking just restarts fresh each reload, same as before this fix.
 VENT_HEALTH_ENTITY = "input_text.keenect_vent_health_state"
+
+# Dedicated entity for away-mode pre-away setpoint persistence (FIX B,
+# 2.6.10) — same rationale/pattern as VENT_HEALTH_ENTITY directly above:
+# STATE_ENTITY has no headroom left, so _st["saved_setpoints"] (populated
+# only for zones currently in away mode) gets its own tiny input_text, saved/
+# restored by _save_saved_setpoints_state()/_restore_saved_setpoints_state().
+# Also created via the HA WS API at deploy time, not package YAML — until it
+# exists, save fails silently (debug log only), identical degrade to
+# _save_vent_health_state().
+SAVED_SETPOINTS_ENTITY = "input_text.keenect_saved_setpoints"
 
 # Zone name <-> compact code for setpoint log persistence (255 char limit)
 # Populated dynamically by _build_derived_maps() at startup; static values are fallback
@@ -1712,11 +1748,19 @@ def _enforce_away_setpoints():
     landed, so this function finds the setpoint already correct and no-ops.
     Self-terminating, no new locking needed.
 
-    Attribution: stash "Away" into setpoint_user_pending[zone] immediately
-    before each write, reusing the same pending-attribution mechanism
-    on_climate_set_temperature uses for UI-driven changes, so on_setpoint_change
-    logs the reclamp as "Away" instead of "System" (context.user_id is None for
-    our own service call, which would otherwise resolve to "System").
+    Attribution (FIX A, 2.6.10): this function does NOT touch
+    setpoint_user_pending — 2.6.9 stashed "Away" there right before each
+    write, reusing the same per-zone slot on_climate_set_temperature uses for
+    real users, and that was racy: on_setpoint_change calls _eval_master()
+    (which runs this function) BEFORE resolving its own attribution, so a
+    real user's stash could be clobbered by this function's "Away" stash
+    before the user's own on_setpoint_change call ever read it — confirmed
+    live 2026-07-31 17:21 as an inverted mislog (manual change logged "Away",
+    the reclamp that corrected it logged "System"). Attribution is now
+    resolved entirely in on_setpoint_change() instead: a still-"System"
+    result gets relabeled "Away" there when the zone is in away mode and the
+    new value exactly equals the away setpoint — deterministic, independent
+    of write ordering. See that function's docstring for the full mechanism.
     """
     away_heat = _float("input_number.away_heat_setpoint", 55.0)
     away_cool = _float("input_number.away_cool_setpoint", 85.0)
@@ -1728,11 +1772,9 @@ def _enforce_away_setpoints():
         cur_heat = _float(heat_key)
         cur_cool = _float(cool_key)
         if cur_heat is not None and cur_heat != away_heat:
-            _st["setpoint_user_pending"][zn] = ("Away", time_mod.time())
             input_number.set_value(entity_id=heat_key, value=away_heat)
             log.info(f"keenect: {zn} away reclamp - heat {cur_heat} -> {away_heat}")
         if cur_cool is not None and cur_cool != away_cool:
-            _st["setpoint_user_pending"][zn] = ("Away", time_mod.time())
             input_number.set_value(entity_id=cool_key, value=away_cool)
             log.info(f"keenect: {zn} away reclamp - cool {cur_cool} -> {away_cool}")
 
@@ -2185,6 +2227,81 @@ def _restore_vent_health_state():
         log.warning(f"keenect: failed to restore vent health state: {e}")
 
 
+def _save_saved_setpoints_state():
+    """Persist _st["saved_setpoints"] (FIX B, 2.6.10) — pre-away setpoints,
+    only present for zones currently in away mode — to a dedicated input_text
+    (SAVED_SETPOINTS_ENTITY), mirroring _save_vent_health_state()'s pattern:
+    compact "<code>:<heat>:<cool>" triples, semicolon-delimited. Unlike the
+    vent-health/setpoint-log helpers this never grows unbounded (at most one
+    entry per zone, max 4 zones) — worst case is ~4x9=36 chars plus 3
+    separators, nowhere near the 255-char cap, so no truncation logic is
+    needed. Called only when saved_setpoints actually changes (away on/off in
+    on_away_change, and the startup away-reconcile block), not on a timer —
+    so the persisted value stays stable in steady state, same as the
+    in-memory dict."""
+    saved = _st.get("saved_setpoints", {})
+    parts = []
+    for zn, vals in saved.items():
+        code = _ZONE_TO_CODE.get(zn.replace("_", " ").title())
+        if not code:
+            continue
+        heat = vals.get("heat")
+        cool = vals.get("cool")
+        if heat is None or cool is None:
+            continue
+        parts.append(f"{code}:{int(heat)}:{int(cool)}")
+    val_str = ";".join(parts)
+    try:
+        input_text.set_value(entity_id=SAVED_SETPOINTS_ENTITY, value=val_str if val_str else " ")
+    except Exception as e:
+        # Debug, not error/warning: this input_text helper must be created via
+        # the HA WS API before it exists (see SAVED_SETPOINTS_ENTITY comment)
+        # — until then this is expected to fail every call, same degrade as
+        # _save_vent_health_state().
+        log.debug(f"keenect: failed to save saved-setpoints state (helper may not exist yet): {e}")
+
+
+def _restore_saved_setpoints_state():
+    """Restore _st["saved_setpoints"] after a restart (FIX B, 2.6.10).
+
+    Only repopulates the in-memory dict — never writes a setpoint itself. The
+    restored value is only ever APPLIED at the away→off transition in
+    on_away_change(), exactly like the in-memory value was already used
+    before this fix. A restored entry for a zone whose away boolean is
+    currently off, or that no longer exists in ZONES (deleted from config),
+    is dropped silently (debug log) rather than applied — restoring is not
+    supposed to re-arm away mode on its own."""
+    try:
+        raw = state.get(SAVED_SETPOINTS_ENTITY)
+        if raw in (None, "", " ", "unknown", "unavailable"):
+            return
+        restored = {}
+        for part in raw.split(";"):
+            fields = part.split(":")
+            if len(fields) != 3:
+                continue
+            code, heat, cool = fields
+            display = _CODE_TO_ZONE.get(code)
+            if not display:
+                continue
+            zn = display.lower().replace(" ", "_")
+            if zn not in ZONES:
+                log.debug(f"keenect: dropping restored saved_setpoints for unknown zone code {code!r}")
+                continue
+            if state.get(f"input_boolean.away_{zn}") != "on":
+                log.debug(f"keenect: dropping restored saved_setpoints for {zn} (away not currently on)")
+                continue
+            try:
+                restored[zn] = {"heat": float(heat), "cool": float(cool)}
+            except ValueError:
+                continue
+        if restored:
+            _st["saved_setpoints"] = restored
+            log.info(f"keenect: restored saved_setpoints for {len(restored)} away zone(s)")
+    except Exception as e:
+        log.warning(f"keenect: failed to restore saved_setpoints state: {e}")
+
+
 def _check_vent_health():
     """Detect stale Keen vents and re-send last commanded position.
 
@@ -2417,6 +2534,7 @@ def on_startup():
         log.info(f"keenect: startup - restored zone_states={_st['zone_states']}")
         _restore_setpoint_log()
         _restore_vent_health_state()
+        _restore_saved_setpoints_state()
         _update_status()
         _update_setpoint_log_sensor()
         _update_cost_sensors()  # publish initial sensor values
@@ -2441,7 +2559,15 @@ def on_startup():
                 log.info(f"keenect: startup drift analysis - {len(drift)} zones")
         except Exception as e:
             log.warning(f"keenect: startup zone learning failed: {e}")
-        # Apply away setpoints for zones already in away mode
+        # Apply away setpoints for zones already in away mode. FIX B
+        # (2.6.10): if _restore_saved_setpoints_state() above already
+        # repopulated saved_setpoints[zn] for this zone (the normal restart-
+        # while-away case, where setpoints are already correctly at the away
+        # values so the `if` below is False and this block wouldn't otherwise
+        # touch saved_setpoints at all), don't overwrite it with `cur_heat`/
+        # `cur_cool` here — those may not be the true pre-away values (e.g. a
+        # setpoint was edited moments before the restart). Only capture
+        # current values as "saved" when nothing was restored.
         away_heat = _float("input_number.away_heat_setpoint", 55.0)
         away_cool = _float("input_number.away_cool_setpoint", 85.0)
         for zn in ZONES:
@@ -2449,10 +2575,12 @@ def on_startup():
                 cur_heat = _float(f"input_number.{zn}_heat_setpoint")
                 cur_cool = _float(f"input_number.{zn}_cool_setpoint")
                 if cur_heat is not None and (cur_heat != away_heat or cur_cool != away_cool):
-                    _st.setdefault("saved_setpoints", {})[zn] = {
-                        "heat": cur_heat,
-                        "cool": cur_cool,
-                    }
+                    if zn not in _st.get("saved_setpoints", {}):
+                        _st.setdefault("saved_setpoints", {})[zn] = {
+                            "heat": cur_heat,
+                            "cool": cur_cool,
+                        }
+                        _save_saved_setpoints_state()
                     input_number.set_value(entity_id=f"input_number.{zn}_heat_setpoint", value=away_heat)
                     input_number.set_value(entity_id=f"input_number.{zn}_cool_setpoint", value=away_cool)
                     log.info(f"keenect: startup - {zn} away, setpoints → {away_heat}/{away_cool}")
@@ -2868,6 +2996,20 @@ def on_setpoint_change(**kwargs):
     else's debounce window it no longer just waits for the next periodic_eval
     tick — _eval_master() spawns _eval_followup() to replay the eval as soon
     as the window clears (see that function's docstring).
+
+    Attribution (FIX A, 2.6.10): real-user resolution (context, then the
+    setpoint_user_pending stash on_climate_set_temperature/on_away_change
+    populate) always runs first and, if it yields a name, that name wins —
+    never overridden below. ONLY when it still resolves to the generic
+    "System" fallback do we check whether this looks like an away-mode
+    reclamp: zone currently in away mode AND the new value exactly equals
+    the away setpoint for this heat/cool attribute. This replaced a timing-
+    based stash in _enforce_away_setpoints() that could clobber a real
+    user's pending entry (see that function's docstring) — equality-checking
+    here instead is deterministic and independent of call ordering. Residual
+    edge case (accepted): a direct input_number/backend write with no user
+    context that happens to numerically equal the away value would still be
+    labeled "Away" even though not actually caused by away logic.
     """
     try:
         eid = kwargs.get("var_name", "")
@@ -2894,6 +3036,12 @@ def on_setpoint_change(**kwargs):
             if pending and (time_mod.time() - pending[1]) < 10:
                 user = pending[0]
                 _st["setpoint_user_pending"].pop(zone, None)
+        if user == "System" and state.get(f"input_boolean.away_{zone}") == "on":
+            away_heat = _float("input_number.away_heat_setpoint", 55.0)
+            away_cool = _float("input_number.away_cool_setpoint", 85.0)
+            away_target = away_heat if sp_type == "heat" else away_cool
+            if away_target is not None and new_f == away_target:
+                user = "Away"
 
         now = dt_mod.datetime.now()
         entry = {
@@ -2950,7 +3098,12 @@ def on_climate_set_temperature(**kwargs):
     "input_boolean.away_mbr", "input_boolean.away_first_floor",
 )
 def on_away_change(**kwargs):
-    """Update thermostat setpoints when away mode is toggled."""
+    """Update thermostat setpoints when away mode is toggled.
+
+    FIX B (2.6.10): saved_setpoints is persisted (SAVED_SETPOINTS_ENTITY) on
+    every change here so it survives an HA restart — see
+    _save_saved_setpoints_state()/_restore_saved_setpoints_state().
+    """
     try:
         eid = kwargs.get("var_name", "")
         zone_name = eid.replace("input_boolean.away_", "")
@@ -2966,19 +3119,33 @@ def on_away_change(**kwargs):
                 "heat": _float(heat_key),
                 "cool": _float(cool_key),
             }
+            _save_saved_setpoints_state()
             away_heat = _float("input_number.away_heat_setpoint", 55.0)
             away_cool = _float("input_number.away_cool_setpoint", 85.0)
             input_number.set_value(entity_id=heat_key, value=away_heat)
             input_number.set_value(entity_id=cool_key, value=away_cool)
             log.info(f"keenect: {zone_name} away ON — setpoints → {away_heat}/{away_cool}")
         elif new_val == "off":
-            # Restore saved setpoints or zone defaults
+            # Restore saved setpoints or zone defaults. Attribution (FIX A,
+            # 2.6.10): stash "Away off" into setpoint_user_pending right
+            # before each write, same mechanism on_climate_set_temperature
+            # uses for real users — safe here (unlike the removed stash in
+            # _enforce_away_setpoints) because this zone's away boolean is
+            # already "off" by the time these writes land, so
+            # _enforce_away_setpoints() won't touch this zone this pass and
+            # can't clobber the stash before on_setpoint_change reads it.
+            # Re-stashed before each of the two writes since the first
+            # write's own on_setpoint_change call consumes (pops) the slot.
             saved = _st.get("saved_setpoints", {}).get(zone_name)
             defaults = ZONE_DEFAULTS.get(zone_name, {"heat": 62, "cool": 76})
             heat_restore = saved["heat"] if saved and saved.get("heat") is not None else defaults["heat"]
             cool_restore = saved["cool"] if saved and saved.get("cool") is not None else defaults["cool"]
+            _st["setpoint_user_pending"][zone_name] = ("Away off", time_mod.time())
             input_number.set_value(entity_id=heat_key, value=heat_restore)
+            _st["setpoint_user_pending"][zone_name] = ("Away off", time_mod.time())
             input_number.set_value(entity_id=cool_key, value=cool_restore)
+            _st.get("saved_setpoints", {}).pop(zone_name, None)
+            _save_saved_setpoints_state()
             log.info(f"keenect: {zone_name} away OFF — setpoints → {heat_restore}/{cool_restore}")
     except Exception as e:
         log.error(f"keenect: on_away_change crashed: {e}")
