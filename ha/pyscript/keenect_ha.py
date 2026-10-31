@@ -6,6 +6,13 @@ Controls Keen smart vents via Hubitat integration (Zigbee radios on Hubitat).
 HVAC furnace controlled directly via HTTP to Flask server (bypasses Hubitat).
 First floor servo register controlled via ESPHome native API (number entity).
 
+Version: 2.6.11 — honor vent_closure_delay. 7 days of history (2026-10-23..30,
+23 single-zone heating cycles) showed vents closing 2-28s after heat-relay-off
+in 21/24 closures instead of after the 120s blower spin-down, causing end-of-
+cycle whistling. Cause: _eval_master's idle-reconciliation branch fired on the
+tick after _hvac_turn_off() with no regard for the pending delayed closure.
+It now waits until vents_closed_after_off is True.
+
 Version: 2.6.10 — two Away-mode fixes. FIX A: 2.6.9's "Away" attribution in
 sensor.keenect_setpoint_log was racy — confirmed live 2026-07-31 17:21, a
 manual setpoint change got logged as "Away" and the reclamp that immediately
@@ -1921,10 +1928,17 @@ def _eval_master():
         if _st["hvac_on"] and not _st["recirc_active"]:
             log.info("keenect: all idle, shutting HVAC off")
             _hvac_turn_off()
-        elif not _st["hvac_on"] and not _st["recirc_active"] and not _circ_enabled():
+        elif (not _st["hvac_on"] and not _st["recirc_active"] and not _circ_enabled()
+              and _st["vents_closed_after_off"]):
             # Idle reconciliation: if HVAC is off and no circ/recirc, ensure vents are
             # closed. This self-heals states where vents were left open by sensor-failure
             # neutral positioning (SENSOR_FAIL_NEUTRAL) after sensors recovered.
+            # FIX (2.6.11): skip while the post-off delayed closure is pending
+            # (vents_closed_after_off False) — this branch used to fire on the very
+            # next tick after _hvac_turn_off() and close vents 2-28s after heat-off,
+            # mid blower spin-down, defeating vent_closure_delay. The timer
+            # (_check_vent_closure_timer) and the 600s stale guard in
+            # _check_consistency still close them.
             open_vents = [k for k, v in _st["vent_levels"].items() if v > 0]
             if open_vents:
                 log.info(f"keenect: idle reconciliation - closing vents left open: {open_vents}")
