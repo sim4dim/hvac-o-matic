@@ -27,10 +27,10 @@ views:
                         name: Vent 1
                       - entity: light.keen_mbr_2
                         name: Vent 2
-                      - entity: sensor.keen_mbr_1_battery
-                        name: Vent 1 Battery
-                      - entity: sensor.keen_mbr_2_battery
-                        name: Vent 2 Battery
+                      - entity: sensor.keen_mbr_1_ventstatus
+                        name: Vent 1 Status
+                      - entity: sensor.keen_mbr_2_ventstatus
+                        name: Vent 2 Status
                       - entity: input_boolean.circ_optout_mbr
                         name: Circulation Opt-out
                       - entity: input_boolean.away_mbr
@@ -82,8 +82,8 @@ views:
                     entities:
                       - entity: light.keen_ben
                         name: Vent
-                      - entity: sensor.keen_ben_battery
-                        name: Vent Battery
+                      - entity: sensor.keen_ben_ventstatus
+                        name: Vent Status
                       - entity: input_boolean.circ_optout_ben
                         name: Circulation Opt-out
                       - entity: input_boolean.away_ben
@@ -105,8 +105,8 @@ views:
                     entities:
                       - entity: light.keen_gene
                         name: Vent
-                      - entity: sensor.keen_gene_battery
-                        name: Vent Battery
+                      - entity: sensor.keen_gene_ventstatus
+                        name: Vent Status
                       - entity: input_boolean.circ_optout_gene
                         name: Circulation Opt-out
                       - entity: input_boolean.away_gene
