@@ -92,6 +92,9 @@ climate:
     name: "Gene's Room"
     unique_id: gene_thermostat
     precision: 0.1
+    # climate_template (0.8.2) never wires static precision:, so HA shows whole
+    # °F. precision_template does set _attr_precision; config-only, survives HACS updates.
+    precision_template: "{{ 0.1 }}"
     hvac_modes:
       - "heat"
       - "cool"
@@ -148,6 +151,9 @@ climate:
     name: "Ben's Room"
     unique_id: ben_thermostat
     precision: 0.1
+    # climate_template (0.8.2) never wires static precision:, so HA shows whole
+    # °F. precision_template does set _attr_precision; config-only, survives HACS updates.
+    precision_template: "{{ 0.1 }}"
     hvac_modes:
       - "heat"
       - "cool"
@@ -203,6 +209,9 @@ climate:
     name: "Master Bedroom"
     unique_id: mbr_thermostat
     precision: 0.1
+    # climate_template (0.8.2) never wires static precision:, so HA shows whole
+    # °F. precision_template does set _attr_precision; config-only, survives HACS updates.
+    precision_template: "{{ 0.1 }}"
     hvac_modes:
       - "heat"
       - "cool"
@@ -258,6 +267,9 @@ climate:
     name: "First Floor"
     unique_id: first_floor_thermostat
     precision: 0.1
+    # climate_template (0.8.2) never wires static precision:, so HA shows whole
+    # °F. precision_template does set _attr_precision; config-only, survives HACS updates.
+    precision_template: "{{ 0.1 }}"
     hvac_modes:
       - "heat"
       - "cool"
