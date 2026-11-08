@@ -6,6 +6,12 @@ Controls Keen smart vents via Hubitat integration (Zigbee radios on Hubitat).
 HVAC furnace controlled directly via HTTP to Flask server (bypasses Hubitat).
 First floor servo register controlled via ESPHome native API (number entity).
 
+Version: 2.6.12 — auto-clear obstructed Keens. keen_mbr_2 reported
+"obstructed" (2026-11-08), then ignored all commands until Hubitat's
+clearObstruction was sent by hand. keenect now watches
+sensor.keen_*_ventstatus, sends clearObstruction via hubitat.send_command
+(max 3 per vent per hour), re-sends the last level on recovery and notifies.
+
 Version: 2.6.11 — honor vent_closure_delay. 7 days of history (2026-10-23..30,
 23 single-zone heating cycles) showed vents closing 2-28s after heat-relay-off
 in 21/24 closures instead of after the 120s blower spin-down, causing end-of-
@@ -575,6 +581,14 @@ _HEALTH_CODE_SENSOR = {v: k for k, v in _HEALTH_SENSOR_CODE.items()}
 # Vent health check - if pressure sensor hasn't reported in this many seconds,
 # the vent is likely offline. Pressure reports every ~5 min, so 30 min = very stale.
 VENT_STALE_SECONDS = 1800  # 30 minutes
+
+# Keen obstruction recovery (see _clear_obstruction). An obstructed Keen
+# ignores all commands until it receives clearObstruction; power cycles don't
+# clear it. Cap the automatic attempts so a real blockage isn't hammered.
+OBSTRUCTION_RECHECK_SECONDS = 120
+OBSTRUCTION_MAX_ATTEMPTS = 3          # per vent per window
+OBSTRUCTION_WINDOW_SECONDS = 3600
+_obstruction_sends = {}               # vent_id -> [send timestamps]
 
 # Keys persisted via input_text (survive HA restarts)
 _PERSIST_KEYS = [
@@ -2413,6 +2427,104 @@ def _check_vent_health():
         log.error(f"keenect: notification failed: {e}")
 
 
+def _vent_status_sensor(vent_id):
+    """light.keen_X -> sensor.keen_X_ventstatus (Hubitat lgk Keen driver attr)."""
+    return f"sensor.{vent_id.replace('light.', '')}_ventstatus"
+
+
+def _vent_status(vent_id):
+    try:
+        return state.get(_vent_status_sensor(vent_id))
+    except NameError:
+        return None  # sensor not present/enabled for this vent
+
+
+def _scan_obstructed_vents():
+    """Start recovery for any Keen currently reporting obstructed. Safety net
+    for the state trigger: covers startup and an obstruction that outlived the
+    attempt window."""
+    if not _enabled():
+        return
+    for zn, zone in ZONES.items():
+        if zone.get("vent_type") != "light":
+            continue
+        for vent_id in zone["vents"]:
+            if _vent_status(vent_id) == "obstructed":
+                task.create(_clear_obstruction, zn, vent_id)
+
+
+def _clear_obstruction(zn, vent_id):
+    """FIX (2.6.12): auto-recover an obstructed Keen. Seen 2026-11-08 on
+    keen_mbr_2: it reported obstructed after closing, then ignored every
+    command and went silent; two power cycles and a parent-router reset didn't
+    help, Hubitat's clearObstruction did (rejoined and obeyed within ~2 min).
+    Send clearObstruction, wait, re-check; on recovery re-send the last
+    commanded level. At most OBSTRUCTION_MAX_ATTEMPTS sends per vent per
+    OBSTRUCTION_WINDOW_SECONDS, then leave a notification for manual action."""
+    task.unique(f"keenect_clear_obstruction_{vent_id}", kill_me=True)
+    nid = f"keenect_obstructed_{vent_id.replace('light.', '')}"
+    sent = False
+    while _vent_status(vent_id) == "obstructed":
+        now_ts = time_mod.time()
+        sends = [t for t in _obstruction_sends.get(vent_id, [])
+                 if now_ts - t < OBSTRUCTION_WINDOW_SECONDS]
+        _obstruction_sends[vent_id] = sends
+        if len(sends) >= OBSTRUCTION_MAX_ATTEMPTS:
+            log.error(f"keenect: {vent_id} ({zn}) still obstructed after "
+                      f"{len(sends)} clearObstruction attempts — giving up for now")
+            try:
+                persistent_notification.create(
+                    title="Keenect: Vent Obstructed",
+                    message=f"{vent_id} ({zn}) is still obstructed after {len(sends)} "
+                            f"automatic Clear Obstruction attempts in the last hour. "
+                            f"Check the vent for a physical blockage, then send "
+                            f"Clear Obstruction from its Hubitat device page.",
+                    notification_id=nid,
+                )
+            except Exception as e:
+                log.error(f"keenect: notification failed: {e}")
+            return
+        sends.append(now_ts)
+        sent = True
+        log.warning(f"keenect: {vent_id} ({zn}) obstructed — sending clearObstruction "
+                    f"(attempt {len(sends)}/{OBSTRUCTION_MAX_ATTEMPTS})")
+        try:
+            hubitat.send_command(entity_id=vent_id, command="clearObstruction")
+        except Exception as e:
+            log.error(f"keenect: clearObstruction to {vent_id} failed: {e}")
+        task.sleep(OBSTRUCTION_RECHECK_SECONDS)
+        if _vent_status(vent_id) == "clearing":
+            task.sleep(OBSTRUCTION_RECHECK_SECONDS)  # still mid-recovery, give it one more wait
+
+    status = _vent_status(vent_id)
+    if status not in ("open", "closed"):
+        return  # sensor gone/unavailable or still clearing — next scan re-evaluates
+    if not sent:
+        return  # status changed before we acted
+    key = f"{zn}:{vent_id}"
+    last_level = _st["vent_levels"].get(key)
+    if last_level is not None:
+        log.info(f"keenect: {vent_id} recovered ({status}), re-sending {last_level}%")
+        try:
+            if last_level == 0:
+                light.turn_off(entity_id=vent_id)
+            else:
+                light.turn_on(entity_id=vent_id, brightness_pct=last_level)
+        except Exception as e:
+            log.error(f"keenect: re-send to {vent_id} failed: {e}")
+    # Send history is kept (pruned by the window) so a vent that keeps
+    # re-obstructing still hits the cap instead of looping forever.
+    try:
+        persistent_notification.create(
+            title="Keenect: Vent Obstruction Cleared",
+            message=f"{vent_id} ({zn}) reported obstructed; keenect sent Clear "
+                    f"Obstruction and it recovered (now {status}).",
+            notification_id=nid,
+        )
+    except Exception as e:
+        log.error(f"keenect: notification failed: {e}")
+
+
 # ---------------------------------------------------------------------------
 # Pyscript triggers
 # ---------------------------------------------------------------------------
@@ -3189,6 +3301,29 @@ def periodic_vent_health():
         _save_vent_health_state()
     except Exception as e:
         log.error(f"keenect: periodic_vent_health crashed: {e}")
+    try:
+        _scan_obstructed_vents()
+    except Exception as e:
+        log.error(f"keenect: obstruction scan crashed: {e}")
+
+
+@state_trigger("sensor.keen_ben_ventstatus == 'obstructed'",
+               "sensor.keen_gene_ventstatus == 'obstructed'",
+               "sensor.keen_mbr_1_ventstatus == 'obstructed'",
+               "sensor.keen_mbr_2_ventstatus == 'obstructed'")
+def on_vent_obstructed(var_name=None, **kwargs):
+    """React immediately when a Keen reports obstructed (periodic scan is the backstop)."""
+    try:
+        if not _enabled():
+            return
+        for zn, zone in ZONES.items():
+            if zone.get("vent_type") != "light":
+                continue
+            for vent_id in zone["vents"]:
+                if _vent_status_sensor(vent_id) == var_name:
+                    task.create(_clear_obstruction, zn, vent_id)
+    except Exception as e:
+        log.error(f"keenect: on_vent_obstructed crashed: {e}")
 
 
 GAS_PRICE_URL = "https://gaschoice.apps.lara.state.mi.us/Choice/CurrentOffers?areaId=2&marketId=1"
