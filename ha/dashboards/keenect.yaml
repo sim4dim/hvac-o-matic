@@ -50,6 +50,12 @@ views:
                       entity: sensor.keenect_vent_first_floor
                       name: "1st Floor Details"
                     entities:
+                      - entity: number.hvac_1st_floor_register_servo_angle
+                        name: Register Angle (0-45°)
+                      - entity: binary_sensor.hvac_1st_floor_register_register_open
+                        name: Register Open
+                      - entity: sensor.hvac_1st_floor_register_wifi_signal
+                        name: Register WiFi
                       - entity: input_boolean.circ_optout_first_floor
                         name: Circulation Opt-out
                       - entity: input_boolean.away_first_floor
