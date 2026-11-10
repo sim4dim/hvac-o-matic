@@ -6,6 +6,12 @@ Controls Keen smart vents via Hubitat integration (Zigbee radios on Hubitat).
 HVAC furnace controlled directly via HTTP to Flask server (bypasses Hubitat).
 First floor servo register controlled via ESPHome native API (number entity).
 
+Version: 2.6.14 — space out clearObstruction retries. 2.6.13 sent all 3
+attempts ~2 min apart (19:33/19:35/19:37 on 2026-11-09), then nothing for an
+hour, so a vent that came back a little later was never retried. Sends are
+now >= 20 min apart (recovery still rechecked every 2 min) and the cap window
+is 6h, so 3 attempts span ~40 min before the "giving up" notification.
+
 Version: 2.6.13 — real Keen status + silent-vent recovery. Investigation
 2026-11-09 found keen_mbr_2 had sent NOTHING device-side (no Zigbee report)
 since 2026-11-08 11:03 — over 24h — while light.keen_mbr_2 and
@@ -611,8 +617,11 @@ VENT_STALE_SECONDS = 1800  # 30 minutes
 # clear it. Cap the automatic attempts so a real blockage isn't hammered.
 # Shared (2.6.13) with the silent-vent recovery path below.
 OBSTRUCTION_RECHECK_SECONDS = 120
+OBSTRUCTION_SEND_GAP_SECONDS = 1200   # min spacing between clearObstruction sends
 OBSTRUCTION_MAX_ATTEMPTS = 3          # per vent per window
-OBSTRUCTION_WINDOW_SECONDS = 3600
+# Window must exceed (MAX_ATTEMPTS - 1) * SEND_GAP, or the oldest send ages out
+# before the cap is reached and the loop retries forever without notifying.
+OBSTRUCTION_WINDOW_SECONDS = 6 * 3600
 _obstruction_sends = {}               # vent_id -> [send timestamps]
 
 # Real Keen status via Hubitat's LAN admin API (2.6.13). Hub Login Security
@@ -2743,6 +2752,13 @@ def _clear_obstruction(zn, vent_id, reason="obstructed"):
         sends = [t for t in _obstruction_sends.get(vent_id, [])
                  if now_ts - t < OBSTRUCTION_WINDOW_SECONDS]
         _obstruction_sends[vent_id] = sends
+        if sends and now_ts - sends[-1] < OBSTRUCTION_SEND_GAP_SECONDS \
+                and len(sends) < OBSTRUCTION_MAX_ATTEMPTS:
+            # 2.6.14: space sends out (2.6.13 fired all 3 within ~4 min, so a
+            # vent that came back a bit later got nothing for an hour). Keep
+            # rechecking in between so recovery is still noticed within 2 min.
+            task.sleep(OBSTRUCTION_RECHECK_SECONDS)
+            continue
         if len(sends) >= OBSTRUCTION_MAX_ATTEMPTS:
             log.error(f"keenect: {vent_id} ({zn}) still {reason} after "
                       f"{len(sends)} clearObstruction attempts — giving up for now")
@@ -2750,12 +2766,13 @@ def _clear_obstruction(zn, vent_id, reason="obstructed"):
                 message = (f"{vent_id} ({zn}) has not reported anything on the Zigbee "
                            f"mesh in over {int(KEEN_REAL_STATUS_STALE_SECONDS // 60)} minutes, "
                            f"despite {len(sends)} automatic Clear Obstruction attempts in the "
-                           f"last hour. It is OFFLINE and physically not following commands — "
+                           f"last {OBSTRUCTION_WINDOW_SECONDS // 3600}h. It is OFFLINE and physically not following commands — "
                            f"check Zigbee connectivity/power, then its Hubitat device page.")
                 title = "Keenect: Vent Offline"
             else:
                 message = (f"{vent_id} ({zn}) is still obstructed after {len(sends)} "
-                           f"automatic Clear Obstruction attempts in the last hour. "
+                           f"automatic Clear Obstruction attempts in the last "
+                           f"{OBSTRUCTION_WINDOW_SECONDS // 3600}h. "
                            f"Check the vent for a physical blockage, then send "
                            f"Clear Obstruction from its Hubitat device page.")
                 title = "Keenect: Vent Obstructed"
