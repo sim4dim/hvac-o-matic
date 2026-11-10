@@ -6,6 +6,30 @@ Controls Keen smart vents via Hubitat integration (Zigbee radios on Hubitat).
 HVAC furnace controlled directly via HTTP to Flask server (bypasses Hubitat).
 First floor servo register controlled via ESPHome native API (number entity).
 
+Version: 2.6.13 — real Keen status + silent-vent recovery. Investigation
+2026-11-09 found keen_mbr_2 had sent NOTHING device-side (no Zigbee report)
+since 2026-11-08 11:03 — over 24h — while light.keen_mbr_2 and
+sensor.keen_mbr_2_ventstatus both kept showing a normal commanded
+open/closed the whole time. Root cause: the Hubitat Keen driver (type 1801)
+calls sendEvent() for level/switch/contact/ventStatus INSIDE setLevel()/
+on()/off(), before the Zigbee command goes out — those HA entities are a
+command echo, not a device report, so 2.6.12's obstruction watch (which only
+fires on ventStatus=="obstructed") can never catch this failure mode; the
+vent just goes quiet and HA never notices. keenect now polls each Keen's
+real Zigbee event history straight from Hubitat's LAN admin API (same
+unauthenticated access used for device management; bypasses the Maker API/
+HA layer entirely) every 10 min (+ once at startup), filtering out command
+and Maker-API-echoed events to find the last genuine device report, and
+publishes sensor.keenect_vent_real_<ben|gene|mbr_1|mbr_2> ("open 100%" /
+"partial N%" / "closed" / "OFFLINE", with reported_level/reported_at/
+last_device_report/silent_minutes/commanded_level/mismatch attributes).
+_clear_obstruction() is refactored to take a reason ("obstructed" or
+"silent") so a silent vent now gets the same clearObstruction recovery
+attempts, attempt cap, and persistent-notification handling the obstructed
+path already had — no duplicated logic. Dashboard's four
+sensor.keen_*_ventstatus rows (command echoes) are replaced with the new
+real-status sensors.
+
 Version: 2.6.12 — auto-clear obstructed Keens. keen_mbr_2 reported
 "obstructed" (2026-11-08), then ignored all commands until Hubitat's
 clearObstruction was sent by hand. keenect now watches
@@ -585,10 +609,37 @@ VENT_STALE_SECONDS = 1800  # 30 minutes
 # Keen obstruction recovery (see _clear_obstruction). An obstructed Keen
 # ignores all commands until it receives clearObstruction; power cycles don't
 # clear it. Cap the automatic attempts so a real blockage isn't hammered.
+# Shared (2.6.13) with the silent-vent recovery path below.
 OBSTRUCTION_RECHECK_SECONDS = 120
 OBSTRUCTION_MAX_ATTEMPTS = 3          # per vent per window
 OBSTRUCTION_WINDOW_SECONDS = 3600
 _obstruction_sends = {}               # vent_id -> [send timestamps]
+
+# Real Keen status via Hubitat's LAN admin API (2.6.13). Hub Login Security
+# is disabled (unauthenticated on the LAN, same access already used for
+# device management — see hubitat_retirement_inventory memory), so
+# http://<host>/device/eventsJson/<id> is reachable directly, bypassing HA/
+# Maker API entirely. Needed because light.keen_*/sensor.keen_*_ventstatus
+# are command echoes, not device reports — see 2.6.13 version note above and
+# _fetch_keen_real_status()'s docstring.
+HUBITAT_HOST = "192.168.1.143"
+_KEEN_HUBITAT_ID = {
+    "light.keen_ben": 487,
+    "light.keen_gene": 488,
+    "light.keen_mbr_1": 366,
+    "light.keen_mbr_2": 489,
+}
+
+# A healthy Keen reports pressure/temperature/level on the Zigbee mesh every
+# ~5-10 min (observed live 2026-11-09 across keen_ben/gene/mbr_1: max gap
+# 604s over several hours). >60 min with zero device-originated reports means
+# the vent itself has gone silent on the mesh — the real 2026-11-08/09
+# incident this fixes had keen_mbr_2 silent for over 24h. Generous margin
+# over the observed ~10min worst case keeps this from false-triggering on a
+# single missed report.
+KEEN_REAL_STATUS_STALE_SECONDS = 3600
+KEEN_REAL_STATUS_MISMATCH_POINTS = 10    # commanded vs. last-reported level delta
+KEEN_REAL_STATUS_MISMATCH_SECONDS = 300  # how long a mismatch must persist before flagging
 
 # Keys persisted via input_text (survive HA restarts)
 _PERSIST_KEYS = [
@@ -2450,61 +2501,296 @@ def _scan_obstructed_vents():
             continue
         for vent_id in zone["vents"]:
             if _vent_status(vent_id) == "obstructed":
-                task.create(_clear_obstruction, zn, vent_id)
+                task.create(_clear_obstruction, zn, vent_id, "obstructed")
 
 
-def _clear_obstruction(zn, vent_id):
-    """FIX (2.6.12): auto-recover an obstructed Keen. Seen 2026-11-08 on
-    keen_mbr_2: it reported obstructed after closing, then ignored every
-    command and went silent; two power cycles and a parent-router reset didn't
-    help, Hubitat's clearObstruction did (rejoined and obeyed within ~2 min).
-    Send clearObstruction, wait, re-check; on recovery re-send the last
-    commanded level. At most OBSTRUCTION_MAX_ATTEMPTS sends per vent per
-    OBSTRUCTION_WINDOW_SECONDS, then leave a notification for manual action."""
-    task.unique(f"keenect_clear_obstruction_{vent_id}", kill_me=True)
-    nid = f"keenect_obstructed_{vent_id.replace('light.', '')}"
-    sent = False
-    while _vent_status(vent_id) == "obstructed":
+# ---------------------------------------------------------------------------
+# Real Keen status (2.6.13) — read straight from Hubitat, not HA
+# ---------------------------------------------------------------------------
+def _fetch_keen_real_status(vent_id):
+    """Fetch vent_id's actual Zigbee-radio event history straight from
+    Hubitat's LAN admin API (unauthenticated — Hub Login Security is
+    disabled; same access ha-deploy already uses for device management),
+    bypassing HA/the Maker API integration entirely.
+
+    This exists because light.keen_*/sensor.keen_*_ventstatus are NOT device
+    reports — the Hubitat Keen driver (type 1801, see keen_driver.groovy)
+    calls sendEvent() for level/switch/contact/ventStatus INSIDE setLevel()/
+    on()/off(), before the Zigbee command is even sent. Those HA entities
+    just echo whatever keenect last commanded. Confirmed 2026-11-09:
+    keen_mbr_2 sat physically open for >24h while both kept showing a normal
+    commanded "closed".
+
+    A genuine device report is an event with type != "command" and an empty
+    producedBy (the Maker API integration stamps producedBy on every command
+    and on every echo it relays — verified by sampling live event logs for
+    all 4 Keens 2026-11-09).
+
+    Returns (last_report_ts, last_level, last_level_ts) — the wall-clock time
+    of the most recent device-originated event of ANY kind (pressure/
+    temperature/level/switch — proof of life), and the most recently
+    REPORTED level plus when that specific report arrived. Any element may
+    be None (fetch failed, or — for a device that has truly never reported —
+    not present in the ~900-event window Hubitat keeps); callers treat None
+    as "unknown", never as zero/closed."""
+    device_id = _KEEN_HUBITAT_ID.get(vent_id)
+    if device_id is None:
+        return None, None, None
+    url = f"http://{HUBITAT_HOST}/device/eventsJson/{device_id}"
+    try:
+        resp = task.executor(urllib.request.urlopen, url, None, 10)
+        events = json_mod.loads(resp.read().decode())
+    except Exception as e:
+        log.warning(f"keenect: Hubitat event-log fetch failed for {vent_id} "
+                    f"(device {device_id}): {e}")
+        return None, None, None
+
+    last_report_ts = None
+    last_level = None
+    last_level_ts = None
+    for e in events:
+        if e.get("type") == "command" or e.get("producedBy"):
+            continue  # command, or an echo relayed through the Maker API
+        try:
+            ts = dt_mod.datetime.fromisoformat(e["date"]).timestamp()
+        except Exception:
+            continue
+        if last_report_ts is None or ts > last_report_ts:
+            last_report_ts = ts
+        if e.get("name") == "level":
+            try:
+                lvl = float(e["value"])
+            except (TypeError, ValueError):
+                continue
+            if last_level_ts is None or ts > last_level_ts:
+                last_level, last_level_ts = lvl, ts
+    return last_report_ts, last_level, last_level_ts
+
+
+def _refresh_keen_real_entry(vent_id, now_ts=None):
+    """Fetch and merge-store vent_id's real status into _st['keen_real'].
+    A fetch failure (or a genuinely empty result) returns all-None from
+    _fetch_keen_real_status — merging keeps the last known good values
+    instead of flapping to "unknown" on a single blip, same fail-safe
+    pattern as _sensor_liveness_age/_check_vent_health elsewhere in this
+    file. Returns the updated entry dict."""
+    if now_ts is None:
         now_ts = time_mod.time()
+    try:
+        last_report_ts, last_level, last_level_ts = _fetch_keen_real_status(vent_id)
+    except Exception as e:
+        log.warning(f"keenect: real-status fetch crashed for {vent_id}: {e}")
+        last_report_ts, last_level, last_level_ts = None, None, None
+    real = _st.setdefault("keen_real", {})
+    prev = real.get(vent_id, {})
+    entry = {
+        "last_report_ts": last_report_ts if last_report_ts is not None else prev.get("last_report_ts"),
+        "last_level": last_level if last_level is not None else prev.get("last_level"),
+        "last_level_ts": last_level_ts if last_level_ts is not None else prev.get("last_level_ts"),
+        "fetched_at": now_ts,
+    }
+    real[vent_id] = entry
+    return entry
+
+
+def _keen_real_state_label(last_level):
+    """Human-readable label from a REPORTED (not commanded) level. The
+    OFFLINE/staleness check in _publish_keen_real_sensor takes precedence
+    over this — this only decides open/partial/closed once a vent is known
+    to still be alive."""
+    if last_level is None:
+        return "unknown"
+    if last_level <= 0:
+        return "closed"
+    if last_level >= 100:
+        return "open 100%"
+    return f"partial {last_level:.0f}%"
+
+
+def _publish_keen_real_sensor(zn, vent_id, vent_label, entry, now_ts):
+    """Publish sensor.keenect_vent_real_<suffix> from a _st['keen_real']
+    entry. OFFLINE means no device-originated event of ANY kind (pressure/
+    temperature/level/switch) in KEEN_REAL_STATUS_STALE_SECONDS — using any
+    report, not just level, catches a vent that's alive on the mesh but
+    hasn't been asked to move lately. mismatch compares the last REPORTED
+    level against keenect's own last commanded level for this vent, debounced
+    KEEN_REAL_STATUS_MISMATCH_SECONDS so a report that's merely a few seconds
+    behind a fresh command doesn't flag. vent_label is the human bit (e.g.
+    "Vent" or "Vent 2") the caller already knows from its position in
+    zone["vents"] — cheaper and less fragile than re-deriving it from
+    vent_id here."""
+    last_report_ts = entry.get("last_report_ts")
+    last_level = entry.get("last_level")
+    last_level_ts = entry.get("last_level_ts")
+    silent_minutes = None
+    offline = True
+    if last_report_ts is not None:
+        silent_minutes = (now_ts - last_report_ts) / 60.0
+        offline = (now_ts - last_report_ts) > KEEN_REAL_STATUS_STALE_SECONDS
+
+    commanded = _st["vent_levels"].get(f"{zn}:{vent_id}")
+    mismatch_since = _st.setdefault("keen_mismatch_since", {})
+    mismatch = False
+    if (not offline and commanded is not None and last_level is not None
+            and abs(commanded - last_level) > KEEN_REAL_STATUS_MISMATCH_POINTS):
+        first_seen = mismatch_since.setdefault(vent_id, now_ts)
+        mismatch = (now_ts - first_seen) > KEEN_REAL_STATUS_MISMATCH_SECONDS
+    else:
+        mismatch_since.pop(vent_id, None)
+
+    label = "OFFLINE" if offline else _keen_real_state_label(last_level)
+    suffix = vent_id.replace("light.keen_", "")
+    sensor_id = f"sensor.keenect_vent_real_{suffix}"
+    try:
+        state.set(sensor_id, label, {
+            "friendly_name": f"Keenect {zn.replace('_', ' ').title()} {vent_label} (actual)",
+            "icon": "mdi:help-network" if offline else "mdi:air-filter",
+            "reported_level": last_level,
+            "reported_at": dt_mod.datetime.fromtimestamp(last_level_ts).isoformat() if last_level_ts else None,
+            "last_device_report": dt_mod.datetime.fromtimestamp(last_report_ts).isoformat() if last_report_ts else None,
+            "silent_minutes": round(silent_minutes, 1) if silent_minutes is not None else None,
+            "commanded_level": commanded,
+            "mismatch": mismatch,
+        })
+    except Exception as e:
+        log.warning(f"keenect: failed to publish {sensor_id}: {e}")
+
+
+def _poll_keen_real_status():
+    """Refresh real Keen status for every light-type vent (periodic + once
+    at startup — see periodic_vent_health/on_startup) and kick off recovery
+    for any vent that's gone silent. Never raises into a caller that also
+    drives furnace control — every fetch is independently guarded."""
+    if not _enabled():
+        return
+    now_ts = time_mod.time()
+    for zn, zone in ZONES.items():
+        if zone.get("vent_type") != "light":
+            continue
+        vents = zone["vents"]
+        for i, vent_id in enumerate(vents):
+            if vent_id not in _KEEN_HUBITAT_ID:
+                continue
+            vent_label = f"Vent {i + 1}" if len(vents) > 1 else "Vent"
+            entry = _refresh_keen_real_entry(vent_id, now_ts)
+            _publish_keen_real_sensor(zn, vent_id, vent_label, entry, now_ts)
+    _scan_silent_vents(now_ts)
+
+
+def _scan_silent_vents(now_ts):
+    """Start recovery for any Keen that's gone silent on the Zigbee mesh —
+    the failure mode _scan_obstructed_vents can't see (see 2.6.13 version
+    note). Runs off the entries _poll_keen_real_status() just refreshed, so
+    it costs no extra Hubitat fetch."""
+    if not _enabled():
+        return
+    real = _st.get("keen_real", {})
+    for zn, zone in ZONES.items():
+        if zone.get("vent_type") != "light":
+            continue
+        for vent_id in zone["vents"]:
+            entry = real.get(vent_id)
+            if entry is None:
+                continue
+            last_report_ts = entry.get("last_report_ts")
+            if last_report_ts is None or now_ts - last_report_ts > KEEN_REAL_STATUS_STALE_SECONDS:
+                task.create(_clear_obstruction, zn, vent_id, "silent")
+
+
+def _clear_obstruction(zn, vent_id, reason="obstructed"):
+    """Auto-recover a Keen that's stopped obeying commands. Two triggers
+    share this recovery loop and its attempt cap/notification (refactored
+    2.6.13 — was obstruction-only since 2.6.12, see _scan_obstructed_vents):
+
+      - reason="obstructed": sensor.keen_*_ventstatus reports "obstructed"
+        (Hubitat's own fault state — a real jam/mechanical block). Seen
+        2026-11-08 on keen_mbr_2: it reported obstructed after closing, then
+        ignored every command; two power cycles and a parent-router reset
+        didn't help, Hubitat's clearObstruction did (rejoined and obeyed
+        within ~2 min).
+      - reason="silent": _scan_silent_vents found no device-originated
+        Zigbee report (pressure/temperature/level/switch) for
+        KEEN_REAL_STATUS_STALE_SECONDS. This covers the companion incident
+        (2026-11-08/09) where the SAME vent went silent on the mesh while
+        continuing to echo a normal commanded ventStatus — "obstructed"
+        never fires for this failure mode, so the old obstruction-only scan
+        missed it entirely.
+
+    Both reasons send the same clearObstruction command (Keen's only
+    recovery command) and share OBSTRUCTION_MAX_ATTEMPTS/_WINDOW_SECONDS so
+    a vent that's both silent AND re-obstructing doesn't get double the
+    budget. "Recovered" differs per reason: a ventStatus of open/closed for
+    "obstructed", a fresh device-originated report for "silent" (checked via
+    its own live re-fetch each loop iteration, not the periodic poll's
+    possibly-10-min-stale cache)."""
+    task.unique(f"keenect_clear_obstruction_{vent_id}", kill_me=True)
+    suffix = vent_id.replace("light.", "")
+    nid = f"keenect_vent_problem_{suffix}"
+    sent = False
+    recovered_entry = None
+
+    while True:
+        now_ts = time_mod.time()
+        if reason == "silent":
+            recovered_entry = _refresh_keen_real_entry(vent_id, now_ts)
+            last_report_ts = recovered_entry.get("last_report_ts")
+            problem = last_report_ts is None or (now_ts - last_report_ts) > KEEN_REAL_STATUS_STALE_SECONDS
+        else:
+            problem = _vent_status(vent_id) == "obstructed"
+        if not problem:
+            break
+
         sends = [t for t in _obstruction_sends.get(vent_id, [])
                  if now_ts - t < OBSTRUCTION_WINDOW_SECONDS]
         _obstruction_sends[vent_id] = sends
         if len(sends) >= OBSTRUCTION_MAX_ATTEMPTS:
-            log.error(f"keenect: {vent_id} ({zn}) still obstructed after "
+            log.error(f"keenect: {vent_id} ({zn}) still {reason} after "
                       f"{len(sends)} clearObstruction attempts — giving up for now")
+            if reason == "silent":
+                message = (f"{vent_id} ({zn}) has not reported anything on the Zigbee "
+                           f"mesh in over {int(KEEN_REAL_STATUS_STALE_SECONDS // 60)} minutes, "
+                           f"despite {len(sends)} automatic Clear Obstruction attempts in the "
+                           f"last hour. It is OFFLINE and physically not following commands — "
+                           f"check Zigbee connectivity/power, then its Hubitat device page.")
+                title = "Keenect: Vent Offline"
+            else:
+                message = (f"{vent_id} ({zn}) is still obstructed after {len(sends)} "
+                           f"automatic Clear Obstruction attempts in the last hour. "
+                           f"Check the vent for a physical blockage, then send "
+                           f"Clear Obstruction from its Hubitat device page.")
+                title = "Keenect: Vent Obstructed"
             try:
-                persistent_notification.create(
-                    title="Keenect: Vent Obstructed",
-                    message=f"{vent_id} ({zn}) is still obstructed after {len(sends)} "
-                            f"automatic Clear Obstruction attempts in the last hour. "
-                            f"Check the vent for a physical blockage, then send "
-                            f"Clear Obstruction from its Hubitat device page.",
-                    notification_id=nid,
-                )
+                persistent_notification.create(title=title, message=message, notification_id=nid)
             except Exception as e:
                 log.error(f"keenect: notification failed: {e}")
             return
         sends.append(now_ts)
         sent = True
-        log.warning(f"keenect: {vent_id} ({zn}) obstructed — sending clearObstruction "
+        log.warning(f"keenect: {vent_id} ({zn}) {reason} — sending clearObstruction "
                     f"(attempt {len(sends)}/{OBSTRUCTION_MAX_ATTEMPTS})")
         try:
             hubitat.send_command(entity_id=vent_id, command="clearObstruction")
         except Exception as e:
             log.error(f"keenect: clearObstruction to {vent_id} failed: {e}")
         task.sleep(OBSTRUCTION_RECHECK_SECONDS)
-        if _vent_status(vent_id) == "clearing":
+        if reason == "obstructed" and _vent_status(vent_id) == "clearing":
             task.sleep(OBSTRUCTION_RECHECK_SECONDS)  # still mid-recovery, give it one more wait
 
-    status = _vent_status(vent_id)
-    if status not in ("open", "closed"):
-        return  # sensor gone/unavailable or still clearing — next scan re-evaluates
     if not sent:
-        return  # status changed before we acted
+        return  # problem cleared before we acted
+
+    if reason == "silent":
+        recovered_desc = _keen_real_state_label(recovered_entry.get("last_level") if recovered_entry else None)
+    else:
+        status = _vent_status(vent_id)
+        if status not in ("open", "closed"):
+            return  # sensor gone/unavailable or still clearing — next scan re-evaluates
+        recovered_desc = f"now {status}"
+
     key = f"{zn}:{vent_id}"
     last_level = _st["vent_levels"].get(key)
     if last_level is not None:
-        log.info(f"keenect: {vent_id} recovered ({status}), re-sending {last_level}%")
+        log.info(f"keenect: {vent_id} recovered ({recovered_desc}), re-sending {last_level}%")
         try:
             if last_level == 0:
                 light.turn_off(entity_id=vent_id)
@@ -2513,12 +2799,13 @@ def _clear_obstruction(zn, vent_id):
         except Exception as e:
             log.error(f"keenect: re-send to {vent_id} failed: {e}")
     # Send history is kept (pruned by the window) so a vent that keeps
-    # re-obstructing still hits the cap instead of looping forever.
+    # re-triggering either reason still hits the shared cap instead of
+    # looping forever.
     try:
         persistent_notification.create(
-            title="Keenect: Vent Obstruction Cleared",
-            message=f"{vent_id} ({zn}) reported obstructed; keenect sent Clear "
-                    f"Obstruction and it recovered (now {status}).",
+            title="Keenect: Vent Obstruction Cleared" if reason == "obstructed" else "Keenect: Vent Back Online",
+            message=f"{vent_id} ({zn}) was {reason}; keenect sent Clear Obstruction and it "
+                    f"recovered ({recovered_desc}).",
             notification_id=nid,
         )
     except Exception as e:
@@ -2661,6 +2948,10 @@ def on_startup():
         _restore_setpoint_log()
         _restore_vent_health_state()
         _restore_saved_setpoints_state()
+        # Backgrounded (task.create): a Hubitat HTTP fetch per vent has no
+        # business delaying the startup safety-sync/eval path above, and a
+        # fetch failure here must never be able to touch furnace control.
+        task.create(_poll_keen_real_status)
         _update_status()
         _update_setpoint_log_sensor()
         _update_cost_sensors()  # publish initial sensor values
@@ -3305,6 +3596,10 @@ def periodic_vent_health():
         _scan_obstructed_vents()
     except Exception as e:
         log.error(f"keenect: obstruction scan crashed: {e}")
+    try:
+        _poll_keen_real_status()
+    except Exception as e:
+        log.error(f"keenect: real-status poll crashed: {e}")
 
 
 @state_trigger("sensor.keen_ben_ventstatus == 'obstructed'",
@@ -3321,7 +3616,7 @@ def on_vent_obstructed(var_name=None, **kwargs):
                 continue
             for vent_id in zone["vents"]:
                 if _vent_status_sensor(vent_id) == var_name:
-                    task.create(_clear_obstruction, zn, vent_id)
+                    task.create(_clear_obstruction, zn, vent_id, "obstructed")
     except Exception as e:
         log.error(f"keenect: on_vent_obstructed crashed: {e}")
 
