@@ -6,6 +6,18 @@ Controls Keen smart vents via Hubitat integration (Zigbee radios on Hubitat).
 HVAC furnace controlled directly via HTTP to Flask server (bypasses Hubitat).
 First floor servo register controlled via ESPHome native API (number entity).
 
+Version: 2.6.15 — vent-offline alerting loop. 2026-11-23: keen_gene had been
+OFFLINE since 11-12 and keen_ben since 11-15, both correctly detected, but the
+only alerts were HA persistent notifications, which nobody saw for days. Phone
+push + twice-daily reminders now live in ha/packages/keen_vent_alerts.yaml
+(plain YAML, independent of this script). Changes here: (1) the real-status
+poll no longer stops when keenect_enabled is off (recovery stays gated), so
+vent state is still known while control is disabled; (2) sensor.keenect_vent_
+real_* gets a checked_at attribute, so last_updated always advances and the
+YAML watchdog can tell a dead poll from a quiet one; (3) a vent that reports
+again on its own now dismisses its leftover "Vent Offline" notification (one
+for keen_mbr_1 had stayed up after it recovered).
+
 Version: 2.6.14 — space out clearObstruction retries. 2.6.13 sent all 3
 attempts ~2 min apart (19:33/19:35/19:37 on 2026-11-09), then nothing for an
 hour, so a vent that came back a little later was never retried. Sends are
@@ -2660,6 +2672,10 @@ def _publish_keen_real_sensor(zn, vent_id, vent_label, entry, now_ts):
             "silent_minutes": round(silent_minutes, 1) if silent_minutes is not None else None,
             "commanded_level": commanded,
             "mismatch": mismatch,
+            # Always changes, so last_updated advances every poll even when
+            # nothing else does — keen_vent_alerts.yaml's monitor-stale check
+            # relies on it.
+            "checked_at": dt_mod.datetime.fromtimestamp(now_ts).isoformat(timespec="seconds"),
         })
     except Exception as e:
         log.warning(f"keenect: failed to publish {sensor_id}: {e}")
@@ -2669,9 +2685,11 @@ def _poll_keen_real_status():
     """Refresh real Keen status for every light-type vent (periodic + once
     at startup — see periodic_vent_health/on_startup) and kick off recovery
     for any vent that's gone silent. Never raises into a caller that also
-    drives furnace control — every fetch is independently guarded."""
-    if not _enabled():
-        return
+    drives furnace control — every fetch is independently guarded.
+
+    Not gated on _enabled() (2.6.15): this is read-only monitoring, and vent
+    state matters even while control is disabled. Recovery is still gated,
+    in _scan_silent_vents."""
     now_ts = time_mod.time()
     for zn, zone in ZONES.items():
         if zone.get("vent_type") != "light":
@@ -2704,6 +2722,15 @@ def _scan_silent_vents(now_ts):
             last_report_ts = entry.get("last_report_ts")
             if last_report_ts is None or now_ts - last_report_ts > KEEN_REAL_STATUS_STALE_SECONDS:
                 task.create(_clear_obstruction, zn, vent_id, "silent")
+            elif _vent_status(vent_id) != "obstructed":
+                # Reporting again and not obstructed. If it recovered without
+                # our help (e.g. after _clear_obstruction gave up), the
+                # "Vent Offline" notice would otherwise stay up indefinitely.
+                try:
+                    persistent_notification.dismiss(
+                        notification_id=f"keenect_vent_problem_{vent_id.replace('light.', '')}")
+                except Exception:
+                    pass
 
 
 def _clear_obstruction(zn, vent_id, reason="obstructed"):

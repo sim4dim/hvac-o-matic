@@ -1,0 +1,203 @@
+# Keen vent offline alerting (2026-11-23).
+#
+# keenect (pyscript, v2.6.13+) already detects Keen vents that have gone
+# silent on the Zigbee mesh and publishes sensor.keenect_vent_real_<x>
+# ("OFFLINE" / "closed" / "open 100%" / "partial N%") from Hubitat's own event
+# log. Until now the only alerts were HA persistent notifications, and keen_gene
+# (offline since 2026-11-12) and keen_ben (since 2026-11-15) went unnoticed for
+# days. This package closes the loop:
+#   - phone push when a vent goes offline, with its stuck position and a
+#     "Retry Clear Obstruction" button plus a link to its Hubitat page
+#   - phone push when it comes back
+#   - reminder at 08:00 and 19:00 while any vent is still offline
+#   - push if the monitor itself stops (pyscript crashed/not loaded), since
+#     then the vent sensors go quiet and nothing else above can fire
+# Plain YAML on purpose: it only reads the sensors, so a broken keenect
+# reload can't silence the alerts, only trigger the monitor-stale one.
+
+template:
+  - sensor:
+      - name: "Keen Vents Offline"
+        unique_id: keen_vents_offline
+        icon: mdi:air-filter
+        state: >
+          {{ states.sensor
+             | selectattr('entity_id', 'search', '^sensor\.keenect_vent_real_')
+             | selectattr('state', 'eq', 'OFFLINE') | list | count }}
+        attributes:
+          summary: >
+            {% set names = {'ben': "Ben's room", 'gene': "Gene's room",
+                            'mbr_1': 'Master BR vent 1', 'mbr_2': 'Master BR vent 2'} %}
+            {% set ns = namespace(lines=[]) %}
+            {% for s in states.sensor
+                 | selectattr('entity_id', 'search', '^sensor\.keenect_vent_real_')
+                 | selectattr('state', 'eq', 'OFFLINE') %}
+              {% set sfx = s.entity_id.replace('sensor.keenect_vent_real_', '') %}
+              {% set m = s.attributes.silent_minutes | float(0) %}
+              {% set dur = ((m / 1440) | round(1) ~ ' days') if m >= 1440 else ((m / 60) | round(1) ~ ' h') %}
+              {% set lvl = s.attributes.reported_level %}
+              {% set ns.lines = ns.lines + [names.get(sfx, sfx) ~ ': silent ' ~ dur
+                  ~ ', stuck at ' ~ (lvl | int(0) ~ '%' if lvl is not none else 'unknown position')] %}
+            {% endfor %}
+            {{ ns.lines | join('\n') }}
+
+  - binary_sensor:
+      # On if any keenect_vent_real_* sensor is missing or hasn't been
+      # refreshed in 30 min (keenect polls every 10 and stamps checked_at, so
+      # last_updated always advances on a live poll).
+      - name: "Keen Vent Monitor Stale"
+        unique_id: keen_vent_monitor_stale
+        device_class: problem
+        icon: mdi:eye-off
+        state: >
+          {% set s = states.sensor
+             | selectattr('entity_id', 'search', '^sensor\.keenect_vent_real_') | list %}
+          {{ s | count < 4
+             or (s | map(attribute='last_updated') | min) < now() - timedelta(minutes=30) }}
+
+automation:
+  - alias: "Keen Vent Offline Alert"
+    id: keen_vent_offline_alert
+    mode: parallel
+    trigger:
+      - platform: state
+        entity_id:
+          - sensor.keenect_vent_real_ben
+          - sensor.keenect_vent_real_gene
+          - sensor.keenect_vent_real_mbr_1
+          - sensor.keenect_vent_real_mbr_2
+        to: "OFFLINE"
+    condition:
+      # Skip the entity being (re)created after an HA restart; the reminder
+      # below picks up anything still offline.
+      - condition: template
+        value_template: >
+          {{ trigger.from_state is not none
+             and trigger.from_state.state not in ['unknown', 'unavailable'] }}
+    variables: &vent_vars
+      sfx: "{{ trigger.entity_id.replace('sensor.keenect_vent_real_', '') }}"
+      names:
+        ben: "Ben's room"
+        gene: "Gene's room"
+        mbr_1: "Master BR vent 1"
+        mbr_2: "Master BR vent 2"
+      hubitat_ids:
+        ben: 487
+        gene: 488
+        mbr_1: 366
+        mbr_2: 489
+      vent_name: "{{ names[sfx] }}"
+      hubitat_url: "http://192.168.1.143/device/edit/{{ hubitat_ids[sfx] }}"
+      lvl: "{{ state_attr(trigger.entity_id, 'reported_level') }}"
+      cmd: "{{ state_attr(trigger.entity_id, 'commanded_level') }}"
+      last_seen: >
+        {% set t = state_attr(trigger.entity_id, 'last_device_report') %}
+        {{ as_datetime(t).strftime('%a %b %-d %H:%M') if t else 'unknown' }}
+    action:
+      - service: notify.mobile_app_itelephone
+        data:
+          title: "Keen vent OFFLINE: {{ vent_name }}"
+          message: >
+            No Zigbee report since {{ last_seen }}. Physically stuck at
+            {{ (lvl | int(0) ~ '%') if lvl is not none else 'an unknown position' }}
+            (keenect wants {{ cmd if cmd is not none else '?' }}%). keenect will
+            auto-retry Clear Obstruction 3x over ~40 min.
+          data:
+            tag: "keen_vent_{{ sfx }}"
+            url: "{{ hubitat_url }}"
+            push:
+              interruption-level: time-sensitive
+            actions:
+              - action: "KEEN_RETRY_{{ sfx }}"
+                title: "Retry Clear Obstruction"
+              - action: "URI"
+                title: "Open Hubitat device"
+                uri: "{{ hubitat_url }}"
+
+  - alias: "Keen Vent Back Online"
+    id: keen_vent_back_online
+    mode: parallel
+    trigger:
+      - platform: state
+        entity_id:
+          - sensor.keenect_vent_real_ben
+          - sensor.keenect_vent_real_gene
+          - sensor.keenect_vent_real_mbr_1
+          - sensor.keenect_vent_real_mbr_2
+        from: "OFFLINE"
+    condition:
+      - condition: template
+        value_template: >
+          {{ trigger.to_state is not none
+             and trigger.to_state.state not in ['OFFLINE', 'unknown', 'unavailable'] }}
+    variables: *vent_vars
+    action:
+      - service: notify.mobile_app_itelephone
+        data:
+          title: "Keen vent back online: {{ vent_name }}"
+          message: "Reporting again, now {{ trigger.to_state.state }}."
+          data:
+            tag: "keen_vent_{{ sfx }}"   # replaces the OFFLINE alert
+
+  - alias: "Keen Vents Offline Reminder"
+    id: keen_vents_offline_reminder
+    trigger:
+      - platform: time
+        at: "08:00:00"
+      - platform: time
+        at: "19:00:00"
+    condition:
+      - condition: numeric_state
+        entity_id: sensor.keen_vents_offline
+        above: 0
+    action:
+      - service: notify.mobile_app_itelephone
+        data:
+          title: "{{ states('sensor.keen_vents_offline') }} Keen vent(s) still OFFLINE"
+          message: >
+            {{ state_attr('sensor.keen_vents_offline', 'summary') }}
+            Auto-recovery has not worked. Clear Obstruction / re-pair on Hubitat.
+          data:
+            tag: "keen_vents_reminder"
+            url: "http://192.168.1.143/hub/devices"
+
+  - alias: "Keen Vent Retry Clear Obstruction"
+    id: keen_vent_retry_clear_obstruction
+    mode: queued
+    trigger:
+      - platform: event
+        event_type: mobile_app_notification_action
+    condition:
+      - condition: template
+        value_template: >
+          {{ trigger.event.data.action is string
+             and trigger.event.data.action.startswith('KEEN_RETRY_')
+             and trigger.event.data.action[11:] in ['ben', 'gene', 'mbr_1', 'mbr_2'] }}
+    action:
+      - variables:
+          sfx: "{{ trigger.event.data.action[11:] }}"
+      - service: hubitat.send_command
+        data:
+          entity_id: "light.keen_{{ sfx }}"
+          command: clearObstruction
+      - service: logbook.log
+        data:
+          name: "Keen vent alerts"
+          message: "Clear Obstruction sent to light.keen_{{ sfx }} from phone notification"
+
+  - alias: "Keen Vent Monitor Stale Alert"
+    id: keen_vent_monitor_stale_alert
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.keen_vent_monitor_stale
+        to: "on"
+        for: "00:15:00"
+    action:
+      - service: notify.mobile_app_itelephone
+        data:
+          title: "Keen vent monitor NOT running"
+          message: >
+            keenect hasn't refreshed sensor.keenect_vent_real_* in 45+ min, so
+            vent offline alerts can't fire. Check pyscript / keenect logs.
+          data:
+            tag: "keen_vent_monitor"

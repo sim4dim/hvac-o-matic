@@ -4,6 +4,29 @@ views:
     path: overview
     icon: mdi:hvac
     cards:
+      # Keen vent alert banners (only shown while there's a problem) —
+      # see ha/packages/keen_vent_alerts.yaml
+      - type: conditional
+        conditions:
+          - condition: numeric_state
+            entity: sensor.keen_vents_offline
+            above: 0
+        card:
+          type: markdown
+          content: >
+            ## ⚠️ {{ states('sensor.keen_vents_offline') }} Keen vent(s) OFFLINE
+
+            {{ state_attr('sensor.keen_vents_offline', 'summary') | replace('\n', '  \n') }}
+
+            Fix on [Hubitat devices](http://192.168.1.143/hub/devices): Clear Obstruction, then re-pair.
+      - type: conditional
+        conditions:
+          - condition: state
+            entity: binary_sensor.keen_vent_monitor_stale
+            state: "on"
+        card:
+          type: markdown
+          content: "## ⚠️ Keen vent monitor not running: vent status below may be stale"
       # Row 1: Master Bedroom, First Floor
       - type: grid
         columns: 2
