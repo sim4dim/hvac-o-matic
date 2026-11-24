@@ -103,7 +103,7 @@ views:
                       entity: sensor.keenect_vent_ben
                       name: "Ben Details"
                     entities:
-                      - entity: light.keen_ben
+                      - entity: cover.keen_ben_zha
                         name: Vent
                       - entity: sensor.keenect_vent_real_ben
                         name: Ben Vent (actual)
@@ -126,7 +126,7 @@ views:
                       entity: sensor.keenect_vent_gene
                       name: "Gene Details"
                     entities:
-                      - entity: light.keen_gene
+                      - entity: cover.keen_gene_zha
                         name: Vent
                       - entity: sensor.keenect_vent_real_gene
                         name: Gene Vent (actual)

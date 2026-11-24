@@ -6,6 +6,22 @@ Controls Keen smart vents via Hubitat integration (Zigbee radios on Hubitat).
 HVAC furnace controlled directly via HTTP to Flask server (bypasses Hubitat).
 First floor servo register controlled via ESPHome native API (number entity).
 
+Version: 2.6.16 — ZHA cover vents. Keen Ben and Gene were factory reset and
+re-paired from Hubitat onto HA's own ZHA network on 2026-11-24 (SONOFF MG24,
+ch 15) and now appear as cover.keen_{ben,gene}_zha. New vent_type "cover":
+commands go through cover.set_cover_position, read-back uses the
+current_position attribute ONLY, and real status comes from HA (ZHA
+availability + the vent's own temperature/pressure reports), not Hubitat.
+Quirks measured live 2026-11-24 (furnace off): the device Level/OnOff
+attributes matched every command (0/15/50/100); current_position updated
+within 1-4s; the cover's open/closed STATE was wrong for 13-15s+ (Gene showed
+"open" at position 0 and "closed" at 50), so the state is never used; each
+call takes 1-4s (ZHA waits for the vent's ack); back-to-back commands apply in
+order. The vents report power source "Battery or Unknown" (AC eliminator,
+battery firmware), so ZHA only marks them unavailable after 6h — the 60-min
+real-status check stays the primary offline signal. No clearObstruction for
+covers (that was a Hubitat lgk driver command); MBR 1/2 remain on Hubitat.
+
 Version: 2.6.15 — vent-offline alerting loop. 2026-11-23: keen_gene had been
 OFFLINE since 11-12 and keen_ben since 11-15, both correctly detected, but the
 only alerts were HA persistent notifications, which nobody saw for days. Phone
@@ -186,10 +202,10 @@ _HARDCODED_ZONES = {
     "ben": {
         "thermostat": "climate.ben_s_room",
         "temp_sensor": "sensor.gw1000_temp_ch7",
-        "vents": ["light.keen_ben"],
-        "vent_type": "light",
-        "health_sensors": ["sensor.keen_ben_pressure"],
-        "health_sensors_temp": ["sensor.keen_ben_temperature"],
+        "vents": ["cover.keen_ben_zha"],
+        "vent_type": "cover",
+        "health_sensors": ["sensor.keen_ben_zha_pressure"],
+        "health_sensors_temp": ["sensor.keen_ben_zha_temperature"],
         "heat_min_vo": 15, "heat_max_vo": 100,
         "cool_min_vo": 15, "cool_max_vo": 100,
         "fan_vo": 30,
@@ -198,10 +214,10 @@ _HARDCODED_ZONES = {
     "gene": {
         "thermostat": "climate.gene_s_room",
         "temp_sensor": "sensor.gw1000_temp_ch6",
-        "vents": ["light.keen_gene"],
-        "vent_type": "light",
-        "health_sensors": ["sensor.keen_gene_pressure"],
-        "health_sensors_temp": ["sensor.keen_gene_temperature"],
+        "vents": ["cover.keen_gene_zha"],
+        "vent_type": "cover",
+        "health_sensors": ["sensor.keen_gene_zha_pressure"],
+        "health_sensors_temp": ["sensor.keen_gene_zha_temperature"],
         "heat_min_vo": 15, "heat_max_vo": 100,
         "cool_min_vo": 15, "cool_max_vo": 100,
         "fan_vo": 30,
@@ -280,10 +296,11 @@ def _populate_dropdowns():
         # Thermostats
         thermostats = sorted(state.names(domain="climate"))
 
-        # Vents — lights (Keen vents) and numbers (servo registers)
+        # Vents — lights (Hubitat Keens), covers (ZHA Keens) and numbers (servo registers)
         lights = sorted(state.names(domain="light"))
+        covers = sorted(state.names(domain="cover"))
         numbers = sorted(state.names(domain="number"))
-        vent_options = sorted(lights + numbers)
+        vent_options = sorted(lights + covers + numbers)
 
         for slot in range(1, 5):
             pfx = f"keenect_zone_{slot}"
@@ -345,7 +362,10 @@ def _load_zone_config():
             log.warning(f"keenect: zone '{name}' has no thermostat")
             continue
 
-        vents = [v for v in [vent_1, vent_2] if v and v != "(none)"]
+        # str(): state.get() returns StateVal objects that carry the
+        # input_select's attributes; state.getattr() on one returns the
+        # helper's attributes instead of the vent's. Store plain strings.
+        vents = [str(v) for v in [vent_1, vent_2] if v and v != "(none)"]
         if not vents:
             log.warning(f"keenect: zone '{name}' has no vents")
             continue
@@ -357,8 +377,9 @@ def _load_zone_config():
         health_sensors = []
         health_sensors_temp = []
         for v in vents:
-            if vent_type == "light":
-                vent_suffix = v.replace("light.", "")
+            if vent_type in ("light", "cover"):
+                # light.keen_X -> sensor.keen_X_*, cover.keen_X_zha -> sensor.keen_X_zha_*
+                vent_suffix = v.split(".", 1)[1]
                 health_entity = f"sensor.{vent_suffix}_pressure"
                 if health_entity in all_sensor_names:
                     health_sensors.append(health_entity)
@@ -645,8 +666,7 @@ _obstruction_sends = {}               # vent_id -> [send timestamps]
 # _fetch_keen_real_status()'s docstring.
 HUBITAT_HOST = "192.168.1.143"
 _KEEN_HUBITAT_ID = {
-    "light.keen_ben": 487,
-    "light.keen_gene": 488,
+    # Ben (487) and Gene (488) moved to ZHA 2026-11-24 — see 2.6.16 note.
     "light.keen_mbr_1": 366,
     "light.keen_mbr_2": 489,
 }
@@ -1343,19 +1363,71 @@ def _set_vent(zone_name, level):
             continue
 
         try:
-            if vtype == "number":
-                # ESPHome servo via native HA number entity
-                number.set_value(entity_id=vent_id, value=level)
-            elif vtype == "light":
-                # Keen vents via Hubitat (light entities)
-                if level == 0:
-                    light.turn_off(entity_id=vent_id)
-                else:
-                    light.turn_on(entity_id=vent_id, brightness_pct=level)
+            _command_vent(vtype, vent_id, level)
             _st["vent_levels"][key] = level
             log.info(f"keenect: {zone_name} vent {vent_id} -> {level}")
         except Exception as e:
             log.error(f"keenect: failed {vent_id} -> {level}: {e}")
+
+
+def _command_vent(vtype, vent_id, level):
+    """Send one vent command. Raises on failure; callers own the try/except."""
+    if vtype == "number":
+        # ESPHome servo via native HA number entity
+        number.set_value(entity_id=vent_id, value=level)
+    elif vtype == "cover":
+        # Keen vents on ZHA. position 0 closes (device OnOff=off, Level=0).
+        cover.set_cover_position(entity_id=vent_id, position=level)
+    elif vtype == "light":
+        # Keen vents via Hubitat (light entities)
+        if level == 0:
+            light.turn_off(entity_id=vent_id)
+        else:
+            light.turn_on(entity_id=vent_id, brightness_pct=level)
+
+
+def _cover_position(vent_id):
+    """current_position of a cover vent, or None if unavailable/unknown.
+    Never use the cover's open/closed state: on ZHA Keens it lagged 13-15s+
+    behind the real position (see 2.6.16 note). Never raises: it is called
+    from the control loop, and state.get on a missing entity raises
+    NameError (see the partial-deploy trap in the deploy runbook)."""
+    try:
+        # str(): a vent id read from an input_select helper is a pyscript
+        # StateVal, and state.getattr(<StateVal>) returns the HELPER's
+        # attributes (its options list), not the cover's — current_position
+        # was always None until this (found live 2026-11-24).
+        vent_id = str(vent_id)
+        s = state.get(vent_id)
+        if s in ("unavailable", "unknown", None):
+            return None
+        attrs = state.getattr(vent_id) or {}
+        pos = attrs.get("current_position")
+        return int(pos) if pos is not None else None
+    except Exception as e:
+        log.warning(f"keenect: _cover_position({vent_id}) failed: {e!r}")
+        return None
+
+
+def _uncached_open_covers():
+    """Cover vents that are physically open (>10%) but have no commanded
+    target in _st["vent_levels"] — e.g. opened by hand, or open across an HA
+    restart (vent_levels isn't persisted for Keens). Idle reconciliation only
+    looked at cached targets, so such a vent stayed open until the next
+    cycle. Seen 2026-11-24: Ben/Gene hand-opened to 100% after the ZHA move
+    were never closed by keenect while IDLE."""
+    found = []
+    for zn, zone in ZONES.items():
+        if zone.get("vent_type") != "cover":
+            continue
+        for vent_id in zone["vents"]:
+            key = f"{zn}:{vent_id}"
+            if key in _st["vent_levels"]:
+                continue  # cached: _verify_vents already reconciles these
+            pos = _cover_position(vent_id)
+            if pos is not None and pos > 10:
+                found.append(key)
+    return found
 
 
 def _close_zone(zone_name):
@@ -1395,6 +1467,16 @@ def _verify_vents():
                     del _st["vent_levels"][key]
                     if target == 0 and s != "off":
                         log.warning(f"keenect: vent {vent_id} reconnected open during IDLE, forcing close")
+                        _set_vent(zn, 0)
+                elif vtype == "cover":
+                    pos = _cover_position(vent_id)
+                    if pos is not None and abs(pos - target) <= 10:
+                        continue  # close enough
+                    # Mismatch or unavailable - clear cache so next eval retries
+                    log.warning(f"keenect: vent {vent_id} target={target} position={pos}, clearing cache to retry")
+                    del _st["vent_levels"][key]
+                    if target == 0 and pos is not None and pos > 10:
+                        log.warning(f"keenect: vent {vent_id} open ({pos}%) during IDLE, forcing close")
                         _set_vent(zn, 0)
                 elif vtype == "number":
                     # Servo (ESPHome number entity) — re-assert if diverged (catches ESP reboot reset)
@@ -2026,6 +2108,8 @@ def _eval_master():
             # (_check_vent_closure_timer) and the 600s stale guard in
             # _check_consistency still close them.
             open_vents = [k for k, v in _st["vent_levels"].items() if v > 0]
+            # 2.6.16: also physically-open cover vents keenect never commanded
+            open_vents += _uncached_open_covers()
             if open_vents:
                 log.info(f"keenect: idle reconciliation - closing vents left open: {open_vents}")
                 _close_all_vents()
@@ -2206,6 +2290,12 @@ def _update_status():
                             bri = attrs.get("brightness", 0) if attrs else 0
                         pct = round(int(bri) * 100 / 255) if bri else 0
                         level = max(level, pct)
+                except Exception:
+                    level = max(level, 0)
+            elif vtype == "cover":
+                try:
+                    pos = _cover_position(vent_id)
+                    level = max(level, pos or 0)
                 except Exception:
                     level = max(level, 0)
             elif vtype == "number":
@@ -2473,13 +2563,10 @@ def _check_vent_health():
         log.warning(f"keenect: vent {vent_id} ({zn}) {reason} "
                     f"(sensor: {sensor_id})")
 
-        if last_level is not None and zone.get("vent_type") == "light":
+        if last_level is not None and zone.get("vent_type") in ("light", "cover"):
             log.info(f"keenect: re-sending {vent_id} -> {last_level}%")
             try:
-                if last_level == 0:
-                    light.turn_off(entity_id=vent_id)
-                else:
-                    light.turn_on(entity_id=vent_id, brightness_pct=last_level)
+                _command_vent(zone.get("vent_type"), vent_id, last_level)
             except Exception as e:
                 log.error(f"keenect: re-send to {vent_id} failed: {e}")
 
@@ -2660,8 +2747,7 @@ def _publish_keen_real_sensor(zn, vent_id, vent_label, entry, now_ts):
         mismatch_since.pop(vent_id, None)
 
     label = "OFFLINE" if offline else _keen_real_state_label(last_level)
-    suffix = vent_id.replace("light.keen_", "")
-    sensor_id = f"sensor.keenect_vent_real_{suffix}"
+    sensor_id = f"sensor.keenect_vent_real_{_vent_suffix(vent_id)}"
     try:
         state.set(sensor_id, label, {
             "friendly_name": f"Keenect {zn.replace('_', ' ').title()} {vent_label} (actual)",
@@ -2692,16 +2778,93 @@ def _poll_keen_real_status():
     in _scan_silent_vents."""
     now_ts = time_mod.time()
     for zn, zone in ZONES.items():
-        if zone.get("vent_type") != "light":
+        vtype = zone.get("vent_type")
+        if vtype not in ("light", "cover"):
             continue
         vents = zone["vents"]
         for i, vent_id in enumerate(vents):
-            if vent_id not in _KEEN_HUBITAT_ID:
+            if vtype == "light" and vent_id not in _KEEN_HUBITAT_ID:
                 continue
             vent_label = f"Vent {i + 1}" if len(vents) > 1 else "Vent"
-            entry = _refresh_keen_real_entry(vent_id, now_ts)
+            if vtype == "cover":
+                entry = _cover_real_entry(vent_id, now_ts)
+            else:
+                entry = _refresh_keen_real_entry(vent_id, now_ts)
             _publish_keen_real_sensor(zn, vent_id, vent_label, entry, now_ts)
+            if vtype == "cover":
+                _dismiss_vent_problem_if_healthy(vent_id, entry, now_ts)
     _scan_silent_vents(now_ts)
+
+
+def _vent_suffix(vent_id):
+    """light.keen_ben / cover.keen_ben_zha -> "ben". Keeps the
+    sensor.keenect_vent_real_<suffix> names (and the alerts/dashboard that
+    use them) stable across the Hubitat -> ZHA move."""
+    obj = vent_id.split(".", 1)[1]
+    if obj.startswith("keen_"):
+        obj = obj[len("keen_"):]
+    if obj.endswith("_zha"):
+        obj = obj[:-len("_zha")]
+    return obj
+
+
+def _state_report_ts(entity_id):
+    """Epoch seconds of entity_id's last report to HA, or None if it is
+    missing/unavailable. Prefers last_reported (advances on every report,
+    even an unchanged value) and falls back to last_updated if this pyscript
+    version doesn't expose it. Caveat: after an HA restart both restart at
+    the restore time, so a dead vent can look fresh for up to one stale
+    window."""
+    try:
+        sv = state.get(entity_id)
+    except NameError:
+        return None
+    if sv in (None, "unavailable", "unknown"):
+        return None
+    for attr in ("last_reported", "last_updated"):
+        t = getattr(sv, attr, None)
+        if t is not None:
+            return t.timestamp()
+    return None
+
+
+def _cover_real_entry(vent_id, now_ts):
+    """Real-status entry for a ZHA Keen (vent_type "cover"), same shape as
+    _refresh_keen_real_entry's. Proof of life = the vent's own temperature/
+    pressure reports (device-originated, ~5-10 min cadence measured
+    2026-11-24); the cover entity itself is not counted because HA also writes
+    it on our own commands. A cover that ZHA marks unavailable is reported
+    with last_report_ts None, so it shows OFFLINE immediately."""
+    base = vent_id.split(".", 1)[1]
+    pos = _cover_position(vent_id)
+    last_report_ts = None
+    if pos is not None:
+        for sid in (f"sensor.{base}_temperature", f"sensor.{base}_pressure"):
+            ts = _state_report_ts(sid)
+            if ts is not None and (last_report_ts is None or ts > last_report_ts):
+                last_report_ts = ts
+    entry = {
+        "last_report_ts": last_report_ts,
+        "last_level": float(pos) if pos is not None else None,
+        "last_level_ts": _state_report_ts(vent_id),
+        "fetched_at": now_ts,
+    }
+    _st.setdefault("keen_real", {})[vent_id] = entry
+    return entry
+
+
+def _dismiss_vent_problem_if_healthy(vent_id, entry, now_ts):
+    """Cover-vent counterpart of the dismissal in _scan_silent_vents: clears
+    a leftover keenect_vent_problem_keen_<x> notification (e.g. the Hubitat-
+    era "Vent Offline" for Ben/Gene) once the vent is reporting."""
+    ts = entry.get("last_report_ts")
+    if ts is None or now_ts - ts > KEEN_REAL_STATUS_STALE_SECONDS:
+        return
+    try:
+        persistent_notification.dismiss(
+            notification_id=f"keenect_vent_problem_keen_{_vent_suffix(vent_id)}")
+    except Exception:
+        pass
 
 
 def _scan_silent_vents(now_ts):
@@ -3137,11 +3300,11 @@ def keenect_migrate_config():
 
     # Zone 1 = ben
     _set_zone_helper(1, "ben", "sensor.gw1000_temp_ch7", "climate.ben_s_room",
-                     "light.keen_ben", "(none)", "light", "Aggressive",
+                     "cover.keen_ben_zha", "(none)", "cover", "Aggressive",
                      15, 100, 15, 100, 30, 62, 76)
     # Zone 2 = gene
     _set_zone_helper(2, "gene", "sensor.gw1000_temp_ch6", "climate.gene_s_room",
-                     "light.keen_gene", "(none)", "light", "Aggressive",
+                     "cover.keen_gene_zha", "(none)", "cover", "Aggressive",
                      15, 100, 15, 100, 30, 62, 76)
     # Zone 3 = mbr
     _set_zone_helper(3, "mbr", "sensor.gw1000_temp_ch4", "climate.master_bedroom",

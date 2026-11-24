@@ -168,13 +168,16 @@ input_select:
       - "(none)"
     icon: mdi:air-filter
 
+  # vent_type is NOT persisted by keenect, so `initial` decides it after every
+  # HA restart. Zones 1 (ben) and 2 (gene) are ZHA covers since 2026-11-24.
   keenect_zone_1_vent_type:
     name: "Zone 1 Vent Type"
     options:
       - light
+      - cover
       - number
     icon: mdi:format-list-bulleted
-    initial: light
+    initial: cover
 
   keenect_zone_1_vent_control:
     name: "Zone 1 Vent Control"
@@ -213,9 +216,10 @@ input_select:
     name: "Zone 2 Vent Type"
     options:
       - light
+      - cover
       - number
     icon: mdi:format-list-bulleted
-    initial: light
+    initial: cover
 
   keenect_zone_2_vent_control:
     name: "Zone 2 Vent Control"
@@ -254,6 +258,7 @@ input_select:
     name: "Zone 3 Vent Type"
     options:
       - light
+      - cover
       - number
     icon: mdi:format-list-bulleted
     initial: light
@@ -295,6 +300,7 @@ input_select:
     name: "Zone 4 Vent Type"
     options:
       - light
+      - cover
       - number
     icon: mdi:format-list-bulleted
     initial: number

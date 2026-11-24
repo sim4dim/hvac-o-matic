@@ -81,13 +81,15 @@ automation:
         gene: "Gene's room"
         mbr_1: "Master BR vent 1"
         mbr_2: "Master BR vent 2"
+      # Vents still on Hubitat. Ben and Gene moved to ZHA on 2026-11-24
+      # (cover.keen_<x>_zha): no Hubitat page and no clearObstruction for them.
       hubitat_ids:
-        ben: 487
-        gene: 488
         mbr_1: 366
         mbr_2: 489
+      on_hubitat: "{{ sfx in hubitat_ids }}"
       vent_name: "{{ names[sfx] }}"
-      hubitat_url: "http://192.168.1.143/device/edit/{{ hubitat_ids[sfx] }}"
+      hubitat_url: >
+        {% if sfx in hubitat_ids %}http://192.168.1.143/device/edit/{{ hubitat_ids[sfx] }}{% else %}/config/devices/device/{{ device_id('cover.keen_' ~ sfx ~ '_zha') }}{% endif %}
       lvl: "{{ state_attr(trigger.entity_id, 'reported_level') }}"
       cmd: "{{ state_attr(trigger.entity_id, 'commanded_level') }}"
       last_seen: >
@@ -100,19 +102,21 @@ automation:
           message: >
             No Zigbee report since {{ last_seen }}. Physically stuck at
             {{ (lvl | int(0) ~ '%') if lvl is not none else 'an unknown position' }}
-            (keenect wants {{ cmd if cmd is not none else '?' }}%). keenect will
-            auto-retry Clear Obstruction 3x over ~40 min.
+            (keenect wants {{ cmd if cmd is not none else '?' }}%).
+            {{ 'keenect will auto-retry Clear Obstruction 3x over ~40 min.' if on_hubitat
+               else 'On ZHA: check its power and the hallway repeater, then re-pair if needed.' }}
           data:
             tag: "keen_vent_{{ sfx }}"
             url: "{{ hubitat_url }}"
             push:
               interruption-level: time-sensitive
-            actions:
-              - action: "KEEN_RETRY_{{ sfx }}"
-                title: "Retry Clear Obstruction"
-              - action: "URI"
-                title: "Open Hubitat device"
-                uri: "{{ hubitat_url }}"
+            actions: >
+              {% set open_btn = {'action': 'URI', 'title': 'Open device page', 'uri': hubitat_url} %}
+              {% if on_hubitat %}
+                {{ [{'action': 'KEEN_RETRY_' ~ sfx, 'title': 'Retry Clear Obstruction'}, open_btn] }}
+              {% else %}
+                {{ [open_btn] }}
+              {% endif %}
 
   - alias: "Keen Vent Back Online"
     id: keen_vent_back_online
@@ -156,7 +160,8 @@ automation:
           title: "{{ states('sensor.keen_vents_offline') }} Keen vent(s) still OFFLINE"
           message: >
             {{ state_attr('sensor.keen_vents_offline', 'summary') }}
-            Auto-recovery has not worked. Clear Obstruction / re-pair on Hubitat.
+            Auto-recovery has not worked. MBR vents: Clear Obstruction / re-pair on
+            Hubitat. Ben/Gene (ZHA): check power, then re-pair in HA.
           data:
             tag: "keen_vents_reminder"
             url: "http://192.168.1.143/hub/devices"
@@ -172,7 +177,7 @@ automation:
         value_template: >
           {{ trigger.event.data.action is string
              and trigger.event.data.action.startswith('KEEN_RETRY_')
-             and trigger.event.data.action[11:] in ['ben', 'gene', 'mbr_1', 'mbr_2'] }}
+             and trigger.event.data.action[11:] in ['mbr_1', 'mbr_2'] }}
     action:
       - variables:
           sfx: "{{ trigger.event.data.action[11:] }}"
