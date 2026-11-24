@@ -1,9 +1,10 @@
 # Keen vent offline alerting (2026-11-23).
 #
-# keenect (pyscript, v2.6.13+) already detects Keen vents that have gone
-# silent on the Zigbee mesh and publishes sensor.keenect_vent_real_<x>
-# ("OFFLINE" / "closed" / "open 100%" / "partial N%") from Hubitat's own event
-# log. Until now the only alerts were HA persistent notifications, and keen_gene
+# keenect (pyscript) detects Keen vents that have gone silent on the Zigbee
+# mesh and publishes sensor.keenect_vent_real_<x> ("OFFLINE" / "closed" /
+# "open 100%" / "partial N%"). Since 2026-11-24 (v2.6.16+) that comes from the
+# ZHA covers' own temperature/pressure reports; before that it came from
+# Hubitat's event log. Until now the only alerts were HA persistent notifications, and keen_gene
 # (offline since 2026-11-12) and keen_ben (since 2026-11-15) went unnoticed for
 # days. This package closes the loop:
 #   - phone push when a vent goes offline, with its stuck position and a
