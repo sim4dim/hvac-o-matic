@@ -7,7 +7,7 @@
 # (offline since 2026-11-12) and keen_ben (since 2026-11-15) went unnoticed for
 # days. This package closes the loop:
 #   - phone push when a vent goes offline, with its stuck position and a
-#     "Retry Clear Obstruction" button plus a link to its Hubitat page
+#     link to its HA device page (all Keens are on ZHA since 2026-11-24)
 #   - phone push when it comes back
 #   - reminder at 08:00 and 19:00 while any vent is still offline
 #   - push if the monitor itself stops (pyscript crashed/not loaded), since
@@ -81,15 +81,10 @@ automation:
         gene: "Gene's room"
         mbr_1: "Master BR vent 1"
         mbr_2: "Master BR vent 2"
-      # Vents still on Hubitat. Ben and Gene moved to ZHA on 2026-11-24
-      # (cover.keen_<x>_zha): no Hubitat page and no clearObstruction for them.
-      hubitat_ids:
-        mbr_1: 366
-        mbr_2: 489
-      on_hubitat: "{{ sfx in hubitat_ids }}"
+      # All four Keens moved to ZHA on 2026-11-24 (cover.keen_<x>_zha), so
+      # there is no Hubitat page and no clearObstruction any more.
       vent_name: "{{ names[sfx] }}"
-      hubitat_url: >
-        {% if sfx in hubitat_ids %}http://192.168.1.143/device/edit/{{ hubitat_ids[sfx] }}{% else %}/config/devices/device/{{ device_id('cover.keen_' ~ sfx ~ '_zha') }}{% endif %}
+      device_url: "/config/devices/device/{{ device_id('cover.keen_' ~ sfx ~ '_zha') }}"
       lvl: "{{ state_attr(trigger.entity_id, 'reported_level') }}"
       cmd: "{{ state_attr(trigger.entity_id, 'commanded_level') }}"
       last_seen: >
@@ -103,20 +98,16 @@ automation:
             No Zigbee report since {{ last_seen }}. Physically stuck at
             {{ (lvl | int(0) ~ '%') if lvl is not none else 'an unknown position' }}
             (keenect wants {{ cmd if cmd is not none else '?' }}%).
-            {{ 'keenect will auto-retry Clear Obstruction 3x over ~40 min.' if on_hubitat
-               else 'On ZHA: check its power and the hallway repeater, then re-pair if needed.' }}
+            Check its power and the nearest Zigbee repeater, then re-pair in HA if needed.
           data:
             tag: "keen_vent_{{ sfx }}"
-            url: "{{ hubitat_url }}"
+            url: "{{ device_url }}"
             push:
               interruption-level: time-sensitive
-            actions: >
-              {% set open_btn = {'action': 'URI', 'title': 'Open device page', 'uri': hubitat_url} %}
-              {% if on_hubitat %}
-                {{ [{'action': 'KEEN_RETRY_' ~ sfx, 'title': 'Retry Clear Obstruction'}, open_btn] }}
-              {% else %}
-                {{ [open_btn] }}
-              {% endif %}
+            actions:
+              - action: "URI"
+                title: "Open device page"
+                uri: "{{ device_url }}"
 
   - alias: "Keen Vent Back Online"
     id: keen_vent_back_online
@@ -160,35 +151,10 @@ automation:
           title: "{{ states('sensor.keen_vents_offline') }} Keen vent(s) still OFFLINE"
           message: >
             {{ state_attr('sensor.keen_vents_offline', 'summary') }}
-            Auto-recovery has not worked. MBR vents: Clear Obstruction / re-pair on
-            Hubitat. Ben/Gene (ZHA): check power, then re-pair in HA.
+            Check power and the nearest repeater, then re-pair in HA (ZHA).
           data:
             tag: "keen_vents_reminder"
-            url: "http://192.168.1.143/hub/devices"
-
-  - alias: "Keen Vent Retry Clear Obstruction"
-    id: keen_vent_retry_clear_obstruction
-    mode: queued
-    trigger:
-      - platform: event
-        event_type: mobile_app_notification_action
-    condition:
-      - condition: template
-        value_template: >
-          {{ trigger.event.data.action is string
-             and trigger.event.data.action.startswith('KEEN_RETRY_')
-             and trigger.event.data.action[11:] in ['mbr_1', 'mbr_2'] }}
-    action:
-      - variables:
-          sfx: "{{ trigger.event.data.action[11:] }}"
-      - service: hubitat.send_command
-        data:
-          entity_id: "light.keen_{{ sfx }}"
-          command: clearObstruction
-      - service: logbook.log
-        data:
-          name: "Keen vent alerts"
-          message: "Clear Obstruction sent to light.keen_{{ sfx }} from phone notification"
+            url: "/config/zha/dashboard"
 
   - alias: "Keen Vent Monitor Stale Alert"
     id: keen_vent_monitor_stale_alert

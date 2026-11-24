@@ -6,6 +6,12 @@ Controls Keen smart vents via Hubitat integration (Zigbee radios on Hubitat).
 HVAC furnace controlled directly via HTTP to Flask server (bypasses Hubitat).
 First floor servo register controlled via ESPHome native API (number entity).
 
+Version: 2.6.17 — MBR 1/2 also on ZHA (re-paired 2026-11-24 13:02) and
+switched to cover.keen_mbr_{1,2}_zha; no Keen is on Hubitat any more.
+Measured on them (furnace not forced): device Level/OnOff matched 0/15/50/100;
+MBR 2 commands take 4-9s (vs 1-4s for Ben/Gene), consistent with its weaker
+link (LQI ~112-124, RSSI ~-70).
+
 Version: 2.6.16 — ZHA cover vents. Keen Ben and Gene were factory reset and
 re-paired from Hubitat onto HA's own ZHA network on 2026-11-24 (SONOFF MG24,
 ch 15) and now appear as cover.keen_{ben,gene}_zha. New vent_type "cover":
@@ -226,10 +232,10 @@ _HARDCODED_ZONES = {
     "mbr": {
         "thermostat": "climate.master_bedroom",
         "temp_sensor": "sensor.gw1000_temp_ch4",
-        "vents": ["light.keen_mbr_1", "light.keen_mbr_2"],
-        "vent_type": "light",
-        "health_sensors": ["sensor.keen_mbr_1_pressure", "sensor.keen_mbr_2_pressure"],
-        "health_sensors_temp": ["sensor.keen_mbr_1_temperature", "sensor.keen_mbr_2_temperature"],
+        "vents": ["cover.keen_mbr_1_zha", "cover.keen_mbr_2_zha"],
+        "vent_type": "cover",
+        "health_sensors": ["sensor.keen_mbr_1_zha_pressure", "sensor.keen_mbr_2_zha_pressure"],
+        "health_sensors_temp": ["sensor.keen_mbr_1_zha_temperature", "sensor.keen_mbr_2_zha_temperature"],
         "heat_min_vo": 15, "heat_max_vo": 100,
         "cool_min_vo": 15, "cool_max_vo": 100,
         "fan_vo": 30,
@@ -666,9 +672,9 @@ _obstruction_sends = {}               # vent_id -> [send timestamps]
 # _fetch_keen_real_status()'s docstring.
 HUBITAT_HOST = "192.168.1.143"
 _KEEN_HUBITAT_ID = {
-    # Ben (487) and Gene (488) moved to ZHA 2026-11-24 — see 2.6.16 note.
-    "light.keen_mbr_1": 366,
-    "light.keen_mbr_2": 489,
+    # Empty since 2026-11-24: Ben (487), Gene (488), MBR 1 (366) and MBR 2
+    # (489) all moved to ZHA (see 2.6.16/2.6.17 notes). Kept so a vent put
+    # back on Hubitat can be re-added here.
 }
 
 # A healthy Keen reports pressure/temperature/level on the Zigbee mesh every
@@ -3308,7 +3314,7 @@ def keenect_migrate_config():
                      15, 100, 15, 100, 30, 62, 76)
     # Zone 3 = mbr
     _set_zone_helper(3, "mbr", "sensor.gw1000_temp_ch4", "climate.master_bedroom",
-                     "light.keen_mbr_1", "light.keen_mbr_2", "light", "Aggressive",
+                     "cover.keen_mbr_1_zha", "cover.keen_mbr_2_zha", "cover", "Aggressive",
                      15, 100, 15, 100, 30, 64, 76)
     # Zone 4 = first_floor
     _set_zone_helper(4, "first_floor", "sensor.gw1000_indoor_temperature", "climate.first_floor",

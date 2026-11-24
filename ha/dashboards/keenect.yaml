@@ -46,9 +46,9 @@ views:
                       entity: sensor.keenect_vent_mbr
                       name: "MBR Details"
                     entities:
-                      - entity: light.keen_mbr_1
+                      - entity: cover.keen_mbr_1_zha
                         name: Vent 1
-                      - entity: light.keen_mbr_2
+                      - entity: cover.keen_mbr_2_zha
                         name: Vent 2
                       - entity: sensor.keenect_vent_real_mbr_1
                         name: MBR Vent 1 (actual)

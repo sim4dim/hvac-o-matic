@@ -34,6 +34,18 @@ keenect v2.6.16 drives `cover.keen_ben_zha` and `cover.keen_gene_zha`. MBR 1/2 s
 ## Known gap (pre-existing, not fixed)
 After a keenect restart in the middle of a cycle, a vent that keenect has not commanded since the restart is not re-checked until the cycle ends. At cycle end all vents close. Seen only because a test moved Gene by hand during the cycle; Gene was put back to 0.
 
+## Update 2026-11-24 13:15 EST: MBR 1/2 cut over too (keenect v2.6.17)
+- Zone 3 (mbr) now uses `vent_1 = cover.keen_mbr_1_zha`, `vent_2 = cover.keen_mbr_2_zha`, `vent_type = cover`. This is persisted, and `keenect_zones.yaml` has `initial: cover`.
+- `_KEEN_HUBITAT_ID` is now empty: no Keen is on Hubitat.
+- `keen_vent_alerts.yaml`: every alert links to the HA device page. The Retry Clear Obstruction button and its automation were removed.
+- Dashboard MBR rows now use the ZHA covers.
+- Direct test 0/50/15/100/0: the device Level/OnOff matched every command (50 = 128, 15 = 38, 100 = 254, 0 = 0).
+  - MBR 1 calls took 1-2.4 s.
+  - MBR 2 calls took 4-9 s, and attribute reads were slow too. This fits the weaker link (LQI ~112-124, RSSI ~-70).
+- Closed loop while IDLE:
+  - MBR 1 moved by hand to 50 at 13:11:44; keenect (pyscript) closed it by 13:11:45-49.
+  - MBR 2 moved to 50 at 13:13:03; closed again at 13:13:23.
+- Furnace not forced. The 12:44 heat cycle (Ben) ended normally, and all 4 vents were at 0 after it.
+
 ## Still open (user decision)
-- Delete Hubitat devices 487/488 and their old HA entities (`light.keen_ben/gene`, `cover.keen_ben/gene`, `sensor.keen_ben/gene_*`). keenect no longer uses them. Not done; waiting for the user's OK.
-- MBR 1/2 migration.
+- Delete the departed Keens' Hubitat records (487/488/366/489) and their old HA entities (`light.keen_*`, `cover.keen_{ben,gene,mbr_1,mbr_2}`, `sensor.keen_*` without `_zha`). keenect no longer uses them. Not done; waiting for the user's OK.

@@ -261,7 +261,7 @@ input_select:
       - cover
       - number
     icon: mdi:format-list-bulleted
-    initial: light
+    initial: cover
 
   keenect_zone_3_vent_control:
     name: "Zone 3 Vent Control"
