@@ -175,20 +175,6 @@ views:
           - type: custom:fold-entity-row
             head:
               type: section
-              label: "Zone Learning"
-            entities:
-              - entity: sensor.keenect_zone_rates
-              - entity: sensor.keenect_rate_ben
-                name: Ben
-              - entity: sensor.keenect_rate_gene
-                name: Gene
-              - entity: sensor.keenect_rate_mbr
-                name: Master BR
-              - entity: sensor.keenect_rate_first_floor
-                name: 1st Floor
-          - type: custom:fold-entity-row
-            head:
-              type: section
               label: "Overnight Heat Loss"
             entities:
               - entity: sensor.keenect_drift

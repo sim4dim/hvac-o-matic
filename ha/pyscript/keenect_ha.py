@@ -6,6 +6,15 @@ Controls Keen smart vents as ZHA covers (HA's own Zigbee radio).
 HVAC furnace controlled via the ESP32 ESPHome switches.
 First floor servo register controlled via ESPHome native API (number entity).
 
+Version: 2.6.19 — InfluxDB gone (add-on not installed, found 2026-11-24), so
+history now comes from HA's own recorder (_history_series). The anomaly check
+("Anomalies" row) and the overnight heat-loss analysis read the recorder; the
+anomaly check now reports "No data" for a demanding zone it could not check,
+instead of a false "OK" (it silently skipped every zone while InfluxDB was
+missing). Zone learning (_learn_zone_rates/_compute_vent_factors and
+sensor.keenect_zone_rates/keenect_rate_*) is deleted: its vent factors have
+not been applied since 2.6.x full-open vents (75a18ed, 2026-06-29).
+
 Version: 2.6.18 — Hubitat retired (2026-11-24). Removed the dead Hubitat-only
 code: the eventsJson real-status poll (HUBITAT_HOST/_KEEN_HUBITAT_ID), the
 clearObstruction recovery loop (_clear_obstruction, _scan_obstructed_vents,
@@ -2876,22 +2885,15 @@ def on_startup():
             "icon": "mdi:check-circle",
             "anomalies": [],
         })
-        # Run zone learning on startup (populates vent factors)
+        # Overnight heat-loss analysis on startup (also daily at 03:00)
         try:
-            rates = _learn_zone_rates()
-            if rates:
-                factors = _compute_vent_factors(rates)
-                _st["zone_rates"] = rates
-                _st["zone_vent_factors"] = factors
-                _update_zone_rates_sensor(rates, factors)
-                log.info(f"keenect: startup zone learning - {len(rates)} zones analyzed")
             drift = _learn_drift_rates()
             if drift:
                 _st["zone_drift"] = drift
                 _update_drift_sensors(drift)
                 log.info(f"keenect: startup drift analysis - {len(drift)} zones")
         except Exception as e:
-            log.warning(f"keenect: startup zone learning failed: {e}")
+            log.warning(f"keenect: startup drift analysis failed: {e}")
         # Apply away setpoints for zones already in away mode. FIX B
         # (2.6.10): if _restore_saved_setpoints_state() above already
         # repopulated saved_setpoints[zn] for this zone (the normal restart-
@@ -3553,154 +3555,58 @@ def log_stats():
 
 
 # ---------------------------------------------------------------------------
-# Anomaly detection via InfluxDB
+# History from HA's recorder (2.6.19; was InfluxDB)
 # ---------------------------------------------------------------------------
-INFLUX_URL = "http://a0d7b954-influxdb:8086/query"
-INFLUX_DB = "homeassistant"
+from homeassistant.components.recorder import get_instance as _recorder_instance
+from homeassistant.components.recorder import history as _recorder_history
+
 ANOMALY_THRESHOLD = 1.0  # °F wrong-direction movement triggers alert
 ANOMALY_WINDOW = 30  # minutes of history to analyze
-ZONE_LEARN_DAYS = 7  # days of InfluxDB history for zone rate learning
-ZONE_RATE_BOOST_MAX = 1.4  # max vent multiplier for slow zones
-ZONE_RATE_BOOST_MIN = 0.7  # min vent multiplier for fast zones
+HISTORY_LEARN_DAYS = 7  # days of history for the overnight heat-loss analysis
 
 
-def _influx_temps(entity_short, minutes=30):
-    """Query InfluxDB for recent zone temps. Returns list of (time, value)."""
-    query = (
-        f'SELECT mean("value") FROM "°F" '
-        f"WHERE \"entity_id\" = '{entity_short}' "
-        f"AND time > now() - {minutes}m "
-        f"GROUP BY time(5m) fill(previous)"
-    )
-    params = urllib.parse.urlencode({"db": INFLUX_DB, "q": query})
-    url = f"{INFLUX_URL}?{params}"
-    resp = task.executor(urllib.request.urlopen, url, None, 10)
-    data = json_mod.loads(resp.read().decode())
-    series = data.get("results", [{}])[0].get("series", [])
-    if not series:
-        return []
-    return [(v[0], v[1]) for v in series[0].get("values", []) if v[1] is not None]
-
-
-def _influx_series(entity_short, days=7, interval_min=30):
-    """Query InfluxDB for multi-day temp series at given interval."""
-    query = (
-        f'SELECT mean("value") FROM "°F" '
-        f"WHERE \"entity_id\" = '{entity_short}' "
-        f"AND time > now() - {days}d "
-        f"GROUP BY time({interval_min}m) fill(previous)"
-    )
-    params = urllib.parse.urlencode({"db": INFLUX_DB, "q": query})
-    url = f"{INFLUX_URL}?{params}"
-    resp = task.executor(urllib.request.urlopen, url, None, 15)
-    data = json_mod.loads(resp.read().decode())
-    series = data.get("results", [{}])[0].get("series", [])
-    if not series:
-        return []
-    return [v[1] for v in series[0].get("values", []) if v[1] is not None]
-
-
-def _learn_zone_rates():
-    """Analyze InfluxDB history to compute zone heating/cooling rates (°F/hour)."""
-    rates = {}
-    for zone_name, zone in ZONES.items():
-        entity_short = zone["temp_sensor"].replace("sensor.", "")
+def _history_series(entity_id, minutes, interval_min):
+    """entity_id's value every interval_min over the last `minutes`, read from
+    HA's recorder. Each sample is the last numeric state at or before that
+    time (like InfluxDB's fill(previous)); None before the first known value,
+    so series for different entities over the same window stay index-aligned.
+    Raises on a recorder error. The explicit await is required: pyscript does
+    not await the executor Future by itself (probed live 2026-11-24, 7 days of
+    one sensor = ~1500 rows, 0.05s)."""
+    end = dt_mod.datetime.now(dt_mod.timezone.utc)
+    start = end - dt_mod.timedelta(minutes=minutes)
+    res = await _recorder_instance(hass).async_add_executor_job(
+        _recorder_history.state_changes_during_period, hass, start, end,
+        entity_id, True, False, None, True)
+    pts = []
+    for s in res.get(entity_id, []):
         try:
-            temps = _influx_series(entity_short, days=ZONE_LEARN_DAYS, interval_min=30)
-        except Exception as e:
-            log.warning(f"keenect: zone learning query failed for {zone_name}: {e}")
-            continue
-
-        if len(temps) < 10:
-            continue
-
-        heating_rates = []
-        cooling_rates = []
-        for i in range(1, len(temps)):
-            delta = temps[i] - temps[i - 1]
-            rate_per_hour = delta * 2  # 30-min intervals → °F/hour
-            if rate_per_hour > 0.3:
-                heating_rates.append(rate_per_hour)
-            elif rate_per_hour < -0.3:
-                cooling_rates.append(abs(rate_per_hour))
-
-        # Use median for robustness (outliers from door opens, etc.)
-        heating_rates.sort()
-        cooling_rates.sort()
-        h_med = heating_rates[len(heating_rates) // 2] if heating_rates else 0
-        c_med = cooling_rates[len(cooling_rates) // 2] if cooling_rates else 0
-
-        rates[zone_name] = {
-            "heat_rate": round(h_med, 2),
-            "cool_rate": round(c_med, 2),
-            "heat_samples": len(heating_rates),
-            "cool_samples": len(cooling_rates),
-        }
-
-    return rates
-
-
-def _compute_vent_factors(rates):
-    """Compute per-zone vent multipliers from learned rates. Slow zones get boosted."""
-    factors = {}
-    for mode_key in ("heat_rate", "cool_rate"):
-        mode_rates = {z: r[mode_key] for z, r in rates.items() if r[mode_key] > 0}
-        if not mode_rates:
-            continue
-        avg = sum(mode_rates.values()) / len(mode_rates)
-        if avg <= 0:
-            continue
-        for z, r in mode_rates.items():
-            ratio = avg / r  # >1 for slow zones, <1 for fast zones
-            factor = max(ZONE_RATE_BOOST_MIN, min(ZONE_RATE_BOOST_MAX, ratio))
-            fk = "heat_factor" if mode_key == "heat_rate" else "cool_factor"
-            factors.setdefault(z, {})[fk] = round(factor, 2)
-    return factors
-
-
-def _update_zone_rates_sensor(rates, factors):
-    """Publish zone learning data as sensors (summary + per-zone)."""
-    zone_data = {}
-    for z, r in rates.items():
-        hf = factors.get(z, {}).get("heat_factor", 1.0)
-        cf = factors.get(z, {}).get("cool_factor", 1.0)
-        zone_data[z] = {
-            "heat_rate": f"{r['heat_rate']}°F/h",
-            "cool_rate": f"{r['cool_rate']}°F/h",
-            "heat_factor": hf,
-            "cool_factor": cf,
-        }
-        # Per-zone sensor for dashboard display
-        display = z.replace("_", " ").title()
-        avg_factor = (hf + cf) / 2 if hf and cf else hf or cf or 1.0
-        if avg_factor > 1.05:
-            label = f"Boost ({avg_factor:.1f}x)"
-            icon = "mdi:arrow-up-bold"
-        elif avg_factor < 0.95:
-            label = f"Reduced ({avg_factor:.1f}x)"
-            icon = "mdi:arrow-down-bold"
-        else:
-            label = "Normal"
-            icon = "mdi:minus"
-        state.set(f"sensor.keenect_rate_{z}", label, {
-            "friendly_name": f"{display} Rate",
-            "icon": icon,
-            "heat_rate": f"{r['heat_rate']}°F/h",
-            "cool_rate": f"{r['cool_rate']}°F/h",
-            "heat_factor": hf,
-            "cool_factor": cf,
-        })
-    state.set("sensor.keenect_zone_rates", "Learned", {
-        "friendly_name": "Zone Learning Rates",
-        "icon": "mdi:chart-timeline-variant",
-        "zones": zone_data,
-    })
+            pts.append((s.last_updated.timestamp(), float(s.state)))
+        except (TypeError, ValueError):
+            continue  # unavailable/unknown: keep the previous value
+    out = []
+    i = 0
+    last = None
+    step = interval_min * 60
+    t = start.timestamp() + step
+    end_ts = end.timestamp()
+    while t <= end_ts + 1:
+        while i < len(pts) and pts[i][0] <= t:
+            last = pts[i][1]
+            i += 1
+        out.append(last)
+        t += step
+    return out
 
 
 def _learn_drift_rates():
     """Analyze how fast each zone loses heat when HVAC is off (insulation metric)."""
-    outdoor_temps = _influx_series(OUTDOOR_TEMP_ENTITY.replace("sensor.", ""), days=ZONE_LEARN_DAYS, interval_min=30)
-    if len(outdoor_temps) < 10:
+    try:
+        outdoor_temps = _history_series(OUTDOOR_TEMP_ENTITY, HISTORY_LEARN_DAYS * 1440, 30)
+    except Exception as e:
+        log.warning(f"keenect: drift analysis - outdoor history query failed: {e}")
+        return {}
+    if len([v for v in outdoor_temps if v is not None]) < 10:
         log.warning("keenect: drift analysis - no outdoor temp data")
         return {}
 
@@ -3713,12 +3619,12 @@ def _learn_drift_rates():
 
     drift = {}
     for zone_name, temp_sensor in all_drift_zones.items():
-        entity_short = temp_sensor.replace("sensor.", "")
         try:
-            zone_temps = _influx_series(entity_short, days=ZONE_LEARN_DAYS, interval_min=30)
-        except Exception:
+            zone_temps = _history_series(temp_sensor, HISTORY_LEARN_DAYS * 1440, 30)
+        except Exception as e:
+            log.warning(f"keenect: drift history query failed for {zone_name}: {e}")
             continue
-        if len(zone_temps) < 10:
+        if len([v for v in zone_temps if v is not None]) < 10:
             continue
 
         # Use the shorter list length
@@ -3727,7 +3633,8 @@ def _learn_drift_rates():
         # Detect sensor resolution from minimum observed step
         deltas = [abs(zone_temps[i] - zone_temps[i - 1])
                   for i in range(1, len(zone_temps))
-                  if abs(zone_temps[i] - zone_temps[i - 1]) > 0.01]
+                  if zone_temps[i] is not None and zone_temps[i - 1] is not None
+                  and abs(zone_temps[i] - zone_temps[i - 1]) > 0.01]
         min_step = min(deltas) if deltas else 0.1
 
         # Sliding window: coarse sensors (Sonoff ~1°F steps) need wider windows
@@ -3747,6 +3654,9 @@ def _learn_drift_rates():
         for i in range(window, n):
             indoor = zone_temps[i - window]
             indoor_next = zone_temps[i]
+            outdoor_win = outdoor_temps[i - window:i]
+            if indoor is None or indoor_next is None or None in outdoor_win:
+                continue  # before the first recorded value
             delta_indoor = indoor_next - indoor  # negative = cooling
 
             # Average outdoor temp over the window for stable normalization
@@ -3850,41 +3760,35 @@ def _update_drift_sensors(drift):
 
 
 @time_trigger("cron(0 3 * * *)")
-def daily_zone_learning():
-    """Daily zone rate + drift analysis from InfluxDB history."""
+def daily_drift_analysis():
+    """Daily overnight heat-loss (drift) analysis from HA recorder history."""
     try:
-        rates = _learn_zone_rates()
-        if not rates:
-            log.warning("keenect: zone learning found no data")
-            return
-        factors = _compute_vent_factors(rates)
-        _st["zone_rates"] = rates
-        _st["zone_vent_factors"] = factors
-        _update_zone_rates_sensor(rates, factors)
-
         drift = _learn_drift_rates()
         if drift:
             _st["zone_drift"] = drift
             _update_drift_sensors(drift)
             log.info(f"keenect: drift analysis complete - {drift}")
-
-        log.info(f"keenect: zone learning complete - rates={rates} factors={factors}")
+        else:
+            log.warning("keenect: drift analysis found no data")
     except Exception as e:
-        log.error(f"keenect: daily_zone_learning crashed: {e}")
+        log.error(f"keenect: daily_drift_analysis crashed: {e}")
 
 
 def _detect_anomalies():
-    """Check each zone for temperature moving wrong direction while HVAC active."""
+    """Check each zone for temperature moving wrong direction while HVAC active.
+    Returns (anomalies, unchecked): unchecked = demanding zones whose history
+    could not be read or was too short, so the caller can say "No data"
+    instead of "OK" (2.6.19)."""
     if not _st.get("hvac_on"):
-        return []
+        return [], []
     mode = _hvac_mode()
     if mode not in ("HEAT", "COOL"):
-        return []
+        return [], []
 
     anomalies = []
+    unchecked = []
     for zone_name, zone in ZONES.items():
         sensor = zone["temp_sensor"]
-        entity_short = sensor.replace("sensor.", "")
         current_temp = _float(sensor)
         if current_temp is None:
             continue
@@ -3904,17 +3808,19 @@ def _detect_anomalies():
             continue
 
         try:
-            temps = _influx_temps(entity_short, ANOMALY_WINDOW)
+            temps = [v for v in _history_series(sensor, ANOMALY_WINDOW, 5) if v is not None]
         except Exception as e:
-            log.debug(f"keenect: influx query failed for {zone_name}: {e}")
+            log.warning(f"keenect: anomaly history query failed for {zone_name}: {e}")
+            unchecked.append(zone_name)
             continue
         if len(temps) < 4:
+            unchecked.append(zone_name)
             continue
 
         # Compare first half avg vs second half avg
         mid = len(temps) // 2
-        first_avg = sum([t[1] for t in temps[:mid]]) / mid
-        second_avg = sum([t[1] for t in temps[mid:]]) / (len(temps) - mid)
+        first_avg = sum(temps[:mid]) / mid
+        second_avg = sum(temps[mid:]) / (len(temps) - mid)
         trend = round(second_avg - first_avg, 1)
 
         zone_display = zone_name.replace("_", " ").title()
@@ -3935,22 +3841,28 @@ def _detect_anomalies():
                 "trend": trend,
             })
 
-    return anomalies
+    return anomalies, unchecked
 
 
 @time_trigger("cron(*/10 * * * *)")
 def check_anomalies():
-    """Periodic anomaly detection using InfluxDB temperature trends."""
+    """Periodic anomaly detection from HA recorder temperature trends."""
     try:
-        anomalies = _detect_anomalies()
+        anomalies, unchecked = _detect_anomalies()
         if anomalies:
             summary = "; ".join([f"{a['zone']}: {a['issue']}" for a in anomalies])
+            icon = "mdi:alert-circle"
+        elif unchecked:
+            summary = "No data"  # couldn't check: never report that as OK
+            icon = "mdi:help-circle"
         else:
             summary = "OK"
+            icon = "mdi:check-circle"
         state.set("sensor.keenect_anomalies", summary, {
             "friendly_name": "HVAC Anomalies",
-            "icon": "mdi:alert-circle" if anomalies else "mdi:check-circle",
+            "icon": icon,
             "anomalies": anomalies,
+            "unchecked_zones": unchecked,
         })
         if anomalies:
             for a in anomalies:
