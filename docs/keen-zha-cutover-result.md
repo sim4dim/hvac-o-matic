@@ -47,5 +47,16 @@ After a keenect restart in the middle of a cycle, a vent that keenect has not co
   - MBR 2 moved to 50 at 13:13:03; closed again at 13:13:23.
 - Furnace not forced. The 12:44 heat cycle (Ben) ended normally, and all 4 vents were at 0 after it.
 
-## Still open (user decision)
-- Delete the departed Keens' Hubitat records (487/488/366/489) and their old HA entities (`light.keen_*`, `cover.keen_{ben,gene,mbr_1,mbr_2}`, `sensor.keen_*` without `_zha`). keenect no longer uses them. Not done; waiting for the user's OK.
+## Update 2026-11-24 ~15:10 EST: Hubitat retired (keenect v2.6.18, ec900c3)
+- The user retired Hubitat completely, so housekeeping is removing the HA hubitat integration. That also removes the old Keen entities above, and the hub is being unplugged.
+- Before the removal I checked live that no keenect zone has vent_type `light`. Every Hubitat code path was gated on that.
+- v2.6.18 deletes those paths:
+  - the eventsJson poll;
+  - the clearObstruction recovery loop;
+  - the `sensor.keen_*_ventstatus` trigger.
+- After the deploy at 15:08:
+  - config check valid; keenect reloaded with no errors;
+  - all 4 zone helpers intact;
+  - vents commanded to 0 while IDLE;
+  - `sensor.keenect_vent_real_*` refreshed (all closed); `sensor.keen_vents_offline` = 0.
+- The dashboard offline banner now links to the ZHA dashboard instead of Hubitat.
