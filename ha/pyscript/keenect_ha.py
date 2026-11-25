@@ -6,6 +6,12 @@ Controls Keen smart vents as ZHA covers (HA's own Zigbee radio).
 HVAC furnace controlled via the ESP32 ESPHome switches.
 First floor servo register controlled via ESPHome native API (number entity).
 
+Version: 2.6.20 — the per-vent status rows (sensor.keenect_vent_real_<x>) now
+refresh as soon as a Keen cover's current_position changes
+(on_keen_position_change), not just every 10 min. The dashboard showed MBR
+"closed" while both vents were at 100% and the furnace was heating
+(2026-11-25 14:04-14:10).
+
 Version: 2.6.19 — InfluxDB gone (add-on not installed, found 2026-11-24), so
 history now comes from HA's own recorder (_history_series). The anomaly check
 ("Anomalies" row) and the overnight heat-loss analysis read the recorder; the
@@ -3500,6 +3506,23 @@ def periodic_recirc():
         _check_recirc()
     except Exception as e:
         log.error(f"keenect: periodic_recirc crashed: {e}")
+
+
+@state_trigger(
+    "cover.keen_ben_zha.current_position",
+    "cover.keen_gene_zha.current_position",
+    "cover.keen_mbr_1_zha.current_position",
+    "cover.keen_mbr_2_zha.current_position",
+)
+def on_keen_position_change(**kwargs):
+    """Refresh the real-status rows as soon as a Keen's position changes (2.6.20).
+    Before this they only updated with the 10-min poll, so the dashboard said
+    "closed" for up to 10 min while the vents were open and the furnace was
+    heating. The poll still runs for offline detection."""
+    try:
+        _poll_keen_real_status()
+    except Exception as e:
+        log.error(f"keenect: real-status refresh crashed: {e}")
 
 
 @time_trigger("cron(*/10 * * * *)")
