@@ -131,6 +131,44 @@ views:
                       - entity: input_boolean.away_gene
                         name: Away Mode
 
+      # Row 2b: space heaters (generic_thermostat entities owned by the
+      # housekeeping project, auto-enabled below 40°F outside). Display only:
+      # keenect does not control them. Office and master bath are keenect
+      # passive zones (overnight heat-loss numbers only).
+      - type: grid
+        columns: 2
+        square: false
+        cards:
+          - type: vertical-stack
+            cards:
+              - type: thermostat
+                show_current_as_primary: true
+                entity: climate.office_heat
+                name: Office Heater
+                features:
+                  - type: target-temperature
+                  - type: climate-hvac-modes
+                    hvac_modes: [heat, "off"]
+              - type: entities
+                entities:
+                  - entity: sensor.office_heat_power
+                    name: Power
+
+          - type: vertical-stack
+            cards:
+              - type: thermostat
+                show_current_as_primary: true
+                entity: climate.master_bathroom_heat
+                name: Master Bath Heater
+                features:
+                  - type: target-temperature
+                  - type: climate-hvac-modes
+                    hvac_modes: [heat, "off"]
+              - type: entities
+                entities:
+                  - entity: sensor.master_bathroom_heater_power
+                    name: Power
+
       # Row 3: Cycle ETAs
       - type: entities
         title: Cycle ETAs
